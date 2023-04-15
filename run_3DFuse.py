@@ -32,6 +32,10 @@ from pytorch3d.renderer import PointsRasterizationSettings
 
 from semantic_coding import semantic_coding, semantic_karlo, semantic_sd
 from pc_project import point_e, render_depth_from_cloud
+
+from point_e.util import point_cloud
+import random
+
 device_glb = torch.device("cuda")
 
 def tsr_stats(tsr):
@@ -40,6 +44,124 @@ def tsr_stats(tsr):
         "std": tsr.std().item(),
         "max": tsr.max().item(),
     }
+
+
+def axis_angle_to_matrix(axis, angle):
+    angle = torch.tensor(angle).cuda()
+    c = torch.cos(angle)
+    s = torch.sin(angle)
+    C = 1 - c
+    x, y, z = axis
+
+    mat = torch.zeros((3, 3)).cuda()
+    mat[0, 0] = x * x * C + c
+    mat[0, 1] = x * y * C - z * s
+    mat[0, 2] = x * z * C + y * s
+    mat[1, 0] = y * x * C + z * s
+    mat[1, 1] = y * y * C + c
+    mat[1, 2] = y * z * C - x * s
+    mat[2, 0] = z * x * C - y * s
+    mat[2, 1] = z * y * C + x * s
+    mat[2, 2] = z * z * C + c
+
+    return mat
+
+def total_variation_loss(image):
+    """
+    Compute the total variation loss for an input image.
+
+    Args:
+        image (torch.Tensor): NeRF-generated RGB output with shape (B, C, H, W),
+                              where B is batch size, C is the number of channels (3 for RGB),
+                              H is image height, and W is image width.
+
+    Returns:
+        tv_loss (torch.Tensor): The total variation loss.
+    """
+    # Calculate the differences in the horizontal and vertical directions
+    diff_horizontal = image[:, :, :, 1:] - image[:, :, :, :-1]
+    diff_vertical = image[:, :, 1:, :] - image[:, :, :-1, :]
+
+    # Compute the L1-norm of the differences
+    l1_horizontal = torch.sum(torch.abs(diff_horizontal))
+    l1_vertical = torch.sum(torch.abs(diff_vertical))
+
+    # Combine the horizontal and vertical L1-norms to compute the total variation loss
+    tv_loss = l1_horizontal + l1_vertical
+
+    return tv_loss
+
+import torch
+import torch.nn.functional as F
+
+def laplacian(tensor):
+    kernel = torch.tensor([[[[0, 1, 0], [1, -4, 1], [0, 1, 0]]]], dtype=torch.float32, device=tensor.device)
+    laplacian_channels = []
+    for i in range(tensor.shape[1]):
+        channel = tensor[:, i:i+1, :, :]
+        laplacian_channel = F.conv2d(channel, kernel, padding=1)
+        laplacian_channels.append(laplacian_channel)
+    return torch.cat(laplacian_channels, dim=1)
+
+def laplacian_sharpness_loss(rgb, depth):
+    laplacian_rgb = laplacian(rgb)
+    laplacian_depth = laplacian(depth.unsqueeze(0).unsqueeze(0))
+    
+    sharpness_loss_rgb = torch.mean(torch.abs(laplacian_rgb))
+    sharpness_loss_depth = torch.mean(torch.abs(laplacian_depth))
+    
+    total_sharpness_loss = sharpness_loss_rgb #+ sharpness_loss_depth
+    return total_sharpness_loss
+
+def random_pose_variation(pose, max_angle):
+    pose = torch.tensor(pose).float().cuda()
+    # This function perturbs the input pose by rotating it around a random axis by a random angle.
+    angle = random.uniform(-max_angle, max_angle)
+    axis = torch.tensor([random.random(), random.random(), random.random()]).cuda()
+    axis = axis / torch.norm(axis)
+    rotation_matrix = axis_angle_to_matrix(axis, angle)
+
+    # Apply the rotation only to the 3x3 submatrix of the pose
+    perturbed_pose = pose.clone()
+    perturbed_pose[:3, :3] = torch.mm(pose[:3, :3], rotation_matrix)
+    # Convert to numpy
+    perturbed_pose = perturbed_pose.cpu().numpy()    
+    return perturbed_pose
+
+
+def reproject_to_another_pose(image, depth, pose1, pose2, H, W, intrinsics):
+    # Convert input numpy arrays to PyTorch tensors
+    image = image.float()
+    pose1 = torch.from_numpy(pose1).float().cuda()
+    pose2 = torch.from_numpy(pose2).float().cuda()
+    intrinsics = intrinsics.cuda()
+
+    # Create meshgrid
+    yy, xx = torch.meshgrid([torch.arange(0, H).float().cuda(), torch.arange(0, W).float().cuda()])
+    xy_homogeneous = torch.stack([xx, yy, torch.ones_like(xx)], dim=-1).reshape(-1, 3).t()
+
+    # Compute coordinates in the camera frame
+    camera_coordinates = torch.inverse(intrinsics) @ xy_homogeneous * depth.view(-1)
+
+    # Compute coordinates in the world frame
+    world_coordinates = pose1[:3, :3] @ camera_coordinates + pose1[:3, 3].unsqueeze(1)
+
+    # Reproject the world coordinates to the new camera frame
+    camera_coordinates_reprojected = torch.inverse(pose2[:3, :3]) @ (world_coordinates - pose2[:3, 3].unsqueeze(1))
+
+    # Compute the new pixel coordinates
+    pixel_coordinates_reprojected = intrinsics @ camera_coordinates_reprojected
+    pixel_coordinates_reprojected = pixel_coordinates_reprojected[:2] / pixel_coordinates_reprojected[2]
+
+    # Reshape and normalize the pixel coordinates
+    pixel_coordinates_reprojected = pixel_coordinates_reprojected.t().reshape(H, W, 2)
+    pixel_coordinates_reprojected = (pixel_coordinates_reprojected - torch.tensor([W / 2, H / 2]).cuda()) / torch.tensor([W / 2, H / 2]).cuda()
+
+    # Sample the reprojected image using grid_sample
+    reprojected_image = torch.nn.functional.grid_sample(image, pixel_coordinates_reprojected.unsqueeze(0), align_corners=False)
+
+    return reprojected_image
+
 
 class SJC_3DFuse(BaseConf):
     family:     str = "sd"
@@ -94,13 +216,15 @@ class SJC_3DFuse(BaseConf):
         
         # Initial image generation
         image_dir=os.path.join(exp_instance_dir,'initial_image')
-        
-        if semantic_model == "Karlo":
-            semantic_karlo(initial_prompt,image_dir,cfgs['num_initial_image'],cfgs['bg_preprocess'], seed)
-        elif semantic_model == "SD":
-            semantic_sd(initial_prompt,image_dir,cfgs['num_initial_image'],cfgs['bg_preprocess'], seed)
-        else:
-            raise NotImplementedError
+
+        # If instance0 initial image exists skip generation
+        if not os.path.exists(os.path.join(image_dir,'instance0.png')):        
+            if semantic_model == "Karlo":
+                semantic_karlo(initial_prompt,image_dir,cfgs['num_initial_image'],cfgs['bg_preprocess'], seed)
+            elif semantic_model == "SD":
+                semantic_sd(initial_prompt,image_dir,cfgs['num_initial_image'],cfgs['bg_preprocess'], seed)
+            else:
+                raise NotImplementedError
         
         # Optimization  and pivotal tuning for LoRA
         semantic_coding(exp_instance_dir,cfgs,self.sd,initial)
@@ -117,163 +241,223 @@ class SJC_3DFuse(BaseConf):
         poser = self.pose.make()
         
         # Get coarse point cloud from off-the-shelf model
-        points = point_e(device=device_glb,exp_dir=exp_instance_dir)
+        print("Building point cloud")
+        # Check if point cloud exists
+        if not os.path.exists(os.path.join(exp_instance_dir,'points.npz')):
+            points = point_e(device=device_glb,exp_dir=exp_instance_dir)
+            # Use points.save to save the point cloud
+            points.save(os.path.join(exp_instance_dir,"points.npz"))
+            print("Saved point cloud")
+        else:
+            print("Loaded point cloud")
+            points = point_cloud.PointCloud.load(os.path.join(exp_instance_dir,
+                                                              "points.npz"))
+
 
         # Score distillation
-        next(fuse_3d(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=False))
-        
-        
-    def run_gradio(self, points,exp_instance_dir):
-            cfgs = self.dict()
-            initial = cfgs.pop('initial')
-            # exp_dir=os.path.join(cfgs.pop('exp_dir'),initial)
-            
-            # Optimization  and pivotal tuning for LoRA
-            yield gr.update(value=None), "Tuning for the LoRA layer is starting now. It will take approximately ~10 mins.", gr.update(value=None) 
-            semantic_coding(exp_instance_dir,cfgs,self.sd,initial)
-            
-            
-            # Load SD with Consistency Injection Module
-            family = cfgs.pop("family")
-            model = getattr(self, family).make()
-            print(model.prompt)
-            cfgs.pop("vox")
-            vox = self.vox.make()
-            
-            cfgs.pop("pose")
-            poser = self.pose.make()
-            
-            # Score distillation
-            yield from fuse_3d(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=True)
+        pipeline = NeRF_Fuser(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=True)
+        next(pipeline.train())      
 
 
-def fuse_3d(
-    poser, vox, model: ScoreAdapter,
-    lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
-    depth_weight, var_red, exp_instance_dir, points, is_gradio, **kwargs
-):
-    del kwargs
-    if is_gradio:
-        yield gr.update(visible=True), "LoRA layers tuning has just finished. \nScore distillation has started.", gr.update(visible=True)
-
-    assert model.samps_centered()
-    _, target_H, target_W = model.data_shape()
-    bs = 1
-    aabb = vox.aabb.T.cpu().numpy()
-    vox = vox.to(device_glb)
-    opt = torch.optim.Adamax(vox.opt_params(), lr=lr)
-
-    H, W = poser.H, poser.W
-    Ks_, poses_, prompt_prefixes_, angles_list = poser.sample_train(n_steps,device_glb)
-
-    ts = model.us[30:-10]
-
-    fuse = EarlyLoopBreak(5)
-    
-    raster_settings = PointsRasterizationSettings(
-                image_size= 800, 
-                radius = 0.02,
-                points_per_pixel = 10
-            )
-
-    ts = model.us[30:-10]
-    calibration_value=0.0
-    
-
-        
-    with tqdm(total=n_steps) as pbar, \
-        HeartBeat(pbar) as hbeat, \
-            EventStorage(output_dir=os.path.join(exp_instance_dir,'3d')) as metric:
-
-        for i in range(len(poses_)):
-            if fuse.on_break():
-                break
-                
-            depth_map = render_depth_from_cloud(points, angles_list[i], raster_settings, device_glb,calibration_value)
-            
-            y, depth, ws = render_one_view(vox, aabb, H, W, Ks_[i], poses_[i], return_w=True)
 
 
-            p = f"{prompt_prefixes_[i]} {model.prompt}"
-            score_conds = model.prompts_emb([p])
 
-            score_conds['c']=score_conds['c'].repeat(bs,1,1)
-            score_conds['uc']=score_conds['uc'].repeat(bs,1,1)
+class NeRF_Fuser:
+    def __init__(
+        self, poser, vox, model,
+        lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
+        depth_weight, var_red, exp_instance_dir, points, is_gradio, **kwargs
+    ):
+        print("Initializing pipeline")
+        self.poser = poser
+        self.vox = vox
+        self.model = model
+        self.lr = lr
+        self.n_steps = n_steps
+        self.emptiness_scale = emptiness_scale
+        self.emptiness_weight = emptiness_weight
+        self.emptiness_step = emptiness_step
+        self.emptiness_multiplier = emptiness_multiplier
+        self.depth_weight = depth_weight
+        self.var_red = var_red
+        self.exp_instance_dir = exp_instance_dir
+        self.points = points
+        self.is_gradio = is_gradio
 
-            opt.zero_grad()
-            
-            with torch.no_grad():
-                chosen_σs = np.random.choice(ts, bs, replace=False)
-                chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
-                chosen_σs = torch.as_tensor(chosen_σs, device=model.device, dtype=torch.float32)
+        assert model.samps_centered()
+        _, self.target_H, self.target_W = model.data_shape()
+        self.bs = 1
+        self.aabb = vox.aabb.T.cpu().numpy()
+        self.vox = vox.to(device_glb)
+        self.opt = torch.optim.Adamax(vox.opt_params(), lr=lr)
 
+        self.H, self.W = poser.H, poser.W
+        self.Ks_, self.poses_, self.prompt_prefixes_, self.angles_list = poser.sample_train(n_steps, device_glb)
 
-                noise = torch.randn(bs, *y.shape[1:], device=model.device)
+        self.ts = model.us[30:-10]
 
-                zs = y + chosen_σs * noise
+        self.fuse = EarlyLoopBreak(5)
 
-                Ds = model.denoise(zs, chosen_σs,depth_map.unsqueeze(dim=0),**score_conds)
-
-                if var_red:
-                    grad = (Ds - y) / chosen_σs
-                else:
-                    grad = (Ds - zs) / chosen_σs
-
-                grad = grad.mean(0, keepdim=True)
-                
-            y.backward(-grad, retain_graph=True)
-
-            if depth_weight > 0:
-                center_depth = depth[7:-7, 7:-7]
-                border_depth_mean = (depth.sum() - center_depth.sum()) / (64*64-50*50)
-                center_depth_mean = center_depth.mean()
-                depth_diff = center_depth_mean - border_depth_mean
-                depth_loss = - torch.log(depth_diff + 1e-12)
-                depth_loss = depth_weight * depth_loss
-                depth_loss.backward(retain_graph=True)
-
-            emptiness_loss = torch.log(1 + emptiness_scale * ws).mean()
-            emptiness_loss = emptiness_weight * emptiness_loss
-            if emptiness_step * n_steps <= i:
-                emptiness_loss *= emptiness_multiplier
-            emptiness_loss.backward()
-        
-            opt.step()
-
-            metric.put_scalars(**tsr_stats(y))
-
-            if every(pbar, percent=2):
-                with torch.no_grad():
-                    y = model.decode(y)
-                    vis_routine(metric, y, depth,p,depth_map[0])
-                    
-                    if is_gradio :
-                        yield torch_samps_to_imgs(y)[0], f"Progress: {pbar.n}/{pbar.total} \nAfter the generation is complete, the video results will be displayed below.", gr.update(value=None)
-                        
-                        
-                        
-
-            metric.step()
-            pbar.update()
-
-            pbar.set_description(p)
-            hbeat.beat()
-
-        metric.put_artifact(
-            "ckpt", ".pt","", lambda fn: torch.save(vox.state_dict(), fn)
+        self.raster_settings = PointsRasterizationSettings(
+            image_size=800,
+            radius=0.02,
+            points_per_pixel=10
         )
 
-        with EventStorage("result"):
-            evaluate(model, vox, poser)
-        
-        if is_gradio:    
-            yield gr.update(visible=True), f"Generation complete. Please check the video below. \nThe result files and logs are located at {exp_instance_dir}", gr.update(value=os.path.join(exp_instance_dir,'3d/result_10000/video/step_100_.mp4'))
-        else :
-            yield None
-    
-        metric.step()
+        self.ts = model.us[30:-10]
+        self.calibration_value = 0.0
 
-        hbeat.done()
+    def train(self):
+        with tqdm(total=self.n_steps) as pbar, \
+            HeartBeat(pbar) as hbeat, \
+                EventStorage(output_dir=os.path.join(self.exp_instance_dir,'3d')) as metric:
+            self.metric = metric
+            self.pbar = pbar
+            self.hbeat = hbeat
+            self.opt.zero_grad()
+            for i in range(len(self.poses_)):
+                use_guidance = i % 5 != 0
+                if i < 1000: use_guidance = True
+                if i > 9000: use_guidance = False
+                if use_guidance:
+                    self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
+                                        self.prompt_prefixes_[i], i)
+                else:
+                    self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
+                if (i % 2 == 0):
+                    self.opt.step()
+                    self.opt.zero_grad()
+
+            metric.put_artifact(
+                "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
+            )
+
+            with EventStorage("result"):
+                evaluate(self.model, self.vox, self.poser)
+            
+            if self.is_gradio:    
+                yield gr.update(visible=True), f"Generation complete. Please check the video below. \nThe result files and logs are located at {exp_instance_dir}", gr.update(value=os.path.join(exp_instance_dir,'3d/result_10000/video/step_100_.mp4'))
+            else :
+                yield None
+        
+            metric.step()
+
+            hbeat.done()
+
+    def train_one_step_no_guidance(self, pose, angle, k, i, max_angle_variation=0.1):        
+        # Render NeRF from the original pose
+        y1, depth1, ws1 = render_one_view(self.vox, self.aabb, self.H, self.W, k, pose, return_w=True)
+        y1 = self.model.decode(y1).float()
+        tvl1 = total_variation_loss(y1)/1000.0 + total_variation_loss(depth1.unsqueeze(0).unsqueeze(0))/1000.0
+        lsl1 = laplacian_sharpness_loss(y1, depth1)/500.0
+        loss1 = tvl1 + lsl1
+
+        # Render NeRF from a slightly perturbed pose
+        perturbed_pose = random_pose_variation(pose, max_angle_variation)
+        y2, depth2, ws2 = render_one_view(self.vox, self.aabb, self.H, self.W, k, perturbed_pose, return_w=True)
+        y2 = self.model.decode(y2).float()
+        tvl2 = total_variation_loss(y2)/1000.0 + total_variation_loss(depth2.unsqueeze(0).unsqueeze(0))/1000.0
+        lsl2 = laplacian_sharpness_loss(y2, depth2)/500.0
+        loss2 = tvl2 + lsl2
+
+        # Resize depth and depth2 to 512x512
+        depth1 = F.interpolate(depth1.unsqueeze(0).unsqueeze(0), size=(512,512), mode='bilinear')
+        depth2 = F.interpolate(depth2.unsqueeze(0).unsqueeze(0), size=(512,512), mode='bilinear')
+        # Restore original channel dimension
+        depth1 = depth1.squeeze(0).squeeze(0)
+        depth2 = depth2.squeeze(0).squeeze(0)
+
+        # Reproject the results of the first pose to the second pose
+        intrinsics = self.Ks_[i]
+        # Convert intrinsics to cuda torch
+        intrinsics = torch.tensor(intrinsics).float().to(device_glb)
+        y1_reprojected = reproject_to_another_pose(y1, depth1, pose, perturbed_pose, 512,512, intrinsics)
+        # Compute self-consistency loss
+        scl = F.mse_loss(y1_reprojected, y2)
+
+        #Project y2 to the first pose and compute the self-consistency loss
+        y2_reprojected = reproject_to_another_pose(y2, depth2, perturbed_pose, pose, 512,512, intrinsics)
+        scl += F.mse_loss(y2_reprojected, y1)
+
+        scl = scl / 2.0
+        scl = scl * 0.1
+
+        # Combine losses
+        loss = loss1 + loss2 + scl
+        print("Unsupervised loss: ", loss.item())
+
+        loss.backward()
+
+
+    def train_one_step(self, pose, angle, k, prompt_prefix, i):
+        depth_map = render_depth_from_cloud(self.points, 
+                                            angle,
+                                            self.raster_settings,
+                                            device_glb,
+                                            self.calibration_value)
+        
+        y, depth, ws = render_one_view(self.vox, self.aabb, self.H, self.W, k,
+                                       pose, return_w=True)
+
+        p = f"{prompt_prefix} {self.model.prompt}"
+        score_conds = self.model.prompts_emb([p])
+            
+        with torch.no_grad():
+            chosen_σs = np.random.choice(self.ts, self.bs, replace=False)
+            chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
+            chosen_σs = torch.as_tensor(chosen_σs, device=self.model.device, dtype=torch.float32)
+
+
+            noise = torch.randn(self.bs, *y.shape[1:], device=self.model.device)
+
+            zs = y + chosen_σs * noise
+
+            Ds = self.model.denoise(zs, chosen_σs,depth_map.unsqueeze(dim=0),**score_conds)
+
+            if self.var_red:
+                grad = (Ds - y) / chosen_σs
+            else:
+                grad = (Ds - zs) / chosen_σs
+
+            grad = grad.mean(0, keepdim=True)
+            
+        y.backward(-grad, retain_graph=True)
+      #  tvl = total_variation_loss(y)
+       # tvl = tvl /1000.0
+       # tvl.backward(retain_graph=True)
+
+        if self.depth_weight > 0:
+            center_depth = depth[7:-7, 7:-7]
+            border_depth_mean = (depth.sum() - center_depth.sum()) / (64*64-50*50)
+            center_depth_mean = center_depth.mean()
+            depth_diff = center_depth_mean - border_depth_mean
+            depth_loss = - torch.log(depth_diff + 1e-12)
+            depth_loss = self.depth_weight * depth_loss
+            depth_loss.backward(retain_graph=True)
+
+        #lsl = laplacian_sharpness_loss(y, depth)
+        #lsl = lsl*0.001
+        #lsl.backward(retain_graph=True)
+
+        emptiness_loss = torch.log(1 + self.emptiness_scale * ws).mean()
+        emptiness_loss = self.emptiness_weight * emptiness_loss
+        if self.emptiness_step * self.n_steps <= i:
+            emptiness_loss *= self.emptiness_multiplier
+        emptiness_loss.backward()
+    
+        self.metric.put_scalars(**tsr_stats(y))
+
+        if every(self.pbar, percent=2):
+            with torch.no_grad():
+                y = self.model.decode(y)
+                vis_routine(self.metric, y, depth,p,depth_map[0])
+       
+
+        self.metric.step()
+        self.pbar.update()
+
+        self.pbar.set_description(p)
+        self.hbeat.beat()
 
 @torch.no_grad()
 def evaluate(score_model, vox, poser):
@@ -349,4 +533,9 @@ def vis_routine(metric, y, depth,prompt,depth_map):
 
 
 if __name__ == "__main__":
+    def force_cudnn_initialization():
+        s = 32
+        dev = torch.device('cuda')
+        torch.nn.functional.conv2d(torch.zeros(s, s, s, s, device=dev), torch.zeros(s, s, s, s, device=dev))
+    force_cudnn_initialization()
     dispatch(SJC_3DFuse)

@@ -61,7 +61,7 @@ def merge(path_1: str,
     ):
 
     loaded_pipeline = StableDiffusionPipeline.from_pretrained(
-        path_1,
+        path_1
     ).to("cpu")
 
     tok_dict = patch_pipe(loaded_pipeline, path_2, patch_ti=False)

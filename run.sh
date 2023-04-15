@@ -1,10 +1,10 @@
-PROMPT="cute small corgi"
-INITIAL="corgi"
+PROMPT="Magical staff of knowledge. 4k. Trending on artstation."
+INITIAL="staff"
 EXP_DIR="./results"
 RANDOM_SEED=0
 SEMANTIC_MODEL="Karlo" # "SD" or "Karlo"
 
-python run_3DFuse.py \
+python3 run_3DFuse.py \
 --sd.prompt "${PROMPT}" \
 --sd.dir "${EXP_DIR}/${INITIAL}/lora/final_lora.safetensors" \
 --exp_dir $EXP_DIR \

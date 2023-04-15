@@ -111,13 +111,22 @@ def semantic_coding(exp_dir,cfgs,sd,initial):
     weight_dir=os.path.join(exp_dir,'lora')
     if initial=="":
         initial=None
+    modelfile = os.path.join(weight_dir, "final_lora.safetensors")
+    if os.path.exists(modelfile):
+        # If the model exists, we don't need to train it again
+        print("Model exists, skipping training")
+        return
+
+    # Load the weights if they already exist
+    print("Weight dir" + weight_dir)
     
     train(pretrained_model_name_or_path='runwayml/stable-diffusion-v1-5',\
           instance_data_dir=instance_dir,output_dir=weight_dir,gradient_checkpointing=True,\
           scale_lr=True,lora_rank=1,cached_latents=False,save_steps=ti_step,\
           max_train_steps_ti=ti_step,max_train_steps_tuning=pt_step, use_template="object",\
           lr_warmup_steps=0, lr_warmup_steps_lora=100, placeholder_tokens="<0>", initializer_tokens=initial,\
-          continue_inversion=True, continue_inversion_lr=1e-4,device="cuda:0",            
+          continue_inversion=True, continue_inversion_lr=1e-4,device="cuda:0",
+          enable_xformers_memory_efficient_attention=True
           )
     if initial is not None:
         sd.prompt=prompt.replace(initial,'<0>')
