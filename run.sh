@@ -1,5 +1,5 @@
-PROMPT="Magical staff of knowledge. 4k. Trending on artstation."
-INITIAL="staff"
+PROMPT=$1
+INITIAL=$2
 EXP_DIR="./results"
 RANDOM_SEED=0
 SEMANTIC_MODEL="Karlo" # "SD" or "Karlo"

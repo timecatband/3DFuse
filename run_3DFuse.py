@@ -318,7 +318,6 @@ class NeRF_Fuser:
             for i in range(len(self.poses_)):
                 use_guidance = i % 5 != 0
                 if i < 1000: use_guidance = True
-                if i > 9000: use_guidance = False
                 if use_guidance:
                     self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
                                         self.prompt_prefixes_[i], i)
