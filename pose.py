@@ -3,6 +3,7 @@ from numpy import sin, cos
 from math import pi as π
 from my3d import camera_pose
 from my.config import BaseConf
+import random
 
 
 def get_K(H, W, FoV_x):
@@ -106,6 +107,32 @@ def circular_poses(
     horz=np.array(horz)
     return poses
 
+def random_poses(distance_limit=10):
+    # Generate a random distance from the origin
+    distance = random.uniform(1.5, distance_limit)
+
+    # Generate random azimuth and elevation angles
+    azimuth = random.uniform(0, 2 * np.pi)
+    elevation = random.uniform(-np.pi / 2, np.pi / 2)
+
+    # Convert spherical coordinates to Cartesian coordinates
+    x = distance * np.cos(elevation) * np.cos(azimuth)
+    y = distance * np.cos(elevation) * np.sin(azimuth)
+    z = distance * np.sin(elevation)
+
+    # Create the eye position (camera position) from the generated coordinates
+    eye = np.array([x, y, z])
+
+    # Define the target (center) and up vectors
+    center = np.array([0, 0, 0])
+    up = np.array([0, 1, 0])
+
+    # Calculate the camera pose
+    pose = camera_pose(eye, center - eye, up)
+    
+    return pose
+
+
 class PoseConfig(BaseConf):
     rend_hw: int = 64
     FoV: float = 60.0
@@ -158,4 +185,8 @@ class Poser():
     def sample_test(self, n):
         poses = circular_poses(self.R, self.R, n, num_rounds=3)
         poses = np.stack(poses, axis=0)
+        return self.K, poses
+    def sample_random(self, n):
+        poses = np.array([random_poses(1.7) for i in range(n)])
+        poses = np.stack(poses,axis=0)
         return self.K, poses

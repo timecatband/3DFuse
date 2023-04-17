@@ -12,6 +12,7 @@ from run_sjc import (
     device_glb
 )
 
+import sys
 
 # the SD deocder is very memory hungry; the latent image cannot be too large
 # for a graphics card with < 12 GB memory, set this to 128; quality already good
@@ -21,7 +22,7 @@ decoder_bottleneck_hw = 128
 
 
 def final_vis():
-    cfg = optional_load_config(fname="full_config.yml")
+    cfg = optional_load_config(fname=sys.argv[1])
     assert len(cfg) > 0, "can't find cfg file"
     mod = SJC(**cfg)
 
@@ -33,7 +34,7 @@ def final_vis():
     pbar = tqdm(range(1))
 
     with EventStorage(), HeartBeat(pbar):
-        ckpt_fname = "/home/cvlab07/project/wooseok/DiffNeRF/sjc/corgi_no_over_const_intrinsic/control_depth_100/ckpt/step_10000.pt"
+        ckpt_fname = sys.argv[2]
         state = torch.load(ckpt_fname, map_location="cpu")
         vox.load_state_dict(state)
         vox.to(device_glb)
@@ -42,16 +43,16 @@ def final_vis():
             # what dominates the speed is NOT the factor here.
             # you can try from 2 to 8, and the speed is about the same.
             # the dominating factor in the pipeline I believe is the SD decoder.
-            evaluate(model, vox, poser, n_frames=200, factor=4)
+            evaluate(model, vox, poser, n_frames=100, factor=4)
 
 
 @torch.no_grad()
 def evaluate(score_model, vox, poser, n_frames=200, factor=4):
     H, W = poser.H, poser.W
     vox.eval()
-    K, poses = poser.sample_test(n_frames)
+    K, poses = poser.sample_random(n_frames)
     del n_frames
-    poses = poses[60:]  # skip the full overhead view; not interesting
+   # poses = poses[60:]  # skip the full overhead view; not interesting
 
     fuse = EarlyLoopBreak(5)
     metric = get_event_storage()
@@ -70,6 +71,19 @@ def evaluate(score_model, vox, poser, n_frames=200, factor=4):
         y, depth = highres_render_one_view(vox, aabb, H, W, K, pose, f=factor)
         if isinstance(score_model, StableDiffusion):
             y = score_model.decode(y)
+        path = sys.argv[3]
+        rgb = y
+        # Save rgb
+        rgb = rearrange(rgb, "b c h w -> b h w c")
+        rgb = rgb[0].cpu().numpy()
+        rgb = np.clip(rgb, 0, 1)
+        rgb = (rgb * 255).astype(np.uint8)
+        rgb = np.ascontiguousarray(rgb)
+        
+        import cv2
+        # Convert BGR to RGB
+        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        cv2.imwrite(f"{path}/rgb_{i:04d}.png", rgb)
         vis_routine(metric, y, depth)
 
         metric.step()

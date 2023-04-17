@@ -18,6 +18,8 @@ pipe = load_lora()
 device = "cuda"
 prompt = sys.argv[1]
 
+negative_prompt = "blurry. corrupted. distorted. glitch"
+
 dir = sys.argv[2]
 # Load each image in dir
 import os
@@ -26,7 +28,7 @@ for filename in os.listdir(dir):
         print(filename)
         init_image = Image.open(os.path.join(dir, filename))
         print(filename)
-        images = pipe(prompt=prompt, image=init_image, strength=0.2, guidance_scale=7.5).images
+        images = pipe(prompt=prompt, negative_prompt=negative_prompt, image=init_image, strength=0.35, guidance_scale=12.5).images
         images[0].save(os.path.join("denoise-test", filename))
 
 # Load each image in "denoise-test" and stitch them in to a video

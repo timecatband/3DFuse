@@ -110,8 +110,15 @@ def merge_no_control_net(path_1: str,
 
     monkeypatch_remove_lora(loaded_pipeline.unet)
     monkeypatch_remove_lora(loaded_pipeline.text_encoder)
+    keys = sorted(tok_dict.keys())
+    tok_catted = torch.stack([tok_dict[k] for k in keys])
+    ret = {
+        "string_to_token": {"*": torch.tensor(265)},
+        "string_to_param": {"*": tok_catted},
+        "name": "",
+    }
     
-    return loaded_pipeline
+    return loaded_pipeline, ret
 
 
 
@@ -138,6 +145,19 @@ def load_embedding(model,embedding):
     x.weight[:-length]=model.cond_stage_model.transformer.text_model.embeddings.token_embedding.weight
     x.weight[-length:]=embedding['string_to_param']['*']
     model.cond_stage_model.transformer.text_model.embeddings.token_embedding=x
+
+def load_embedding_pipeline(pipeline,embedding):
+    length=len(embedding['string_to_param']['*'])
+    voc=[]
+    for i in range(length):
+        voc.append(f'<{str(i)}>')
+    print(f"Added Token: {voc}")
+    pipeline.tokenizer.add_tokens(voc)
+
+    pipeline.text_encoder.resize_token_embeddings(len(pipeline.tokenizer))
+    
+    token_id = pipeline.tokenizer.convert_tokens_to_ids(voc[0])
+    pipeline.text_encoder.get_input_embeddings().weight.data[token_id] = embedding['string_to_param']['*']
     
 def load_3DFuse(control,dir,alpha):
     ######################LOADCONTROL###########################
@@ -154,7 +174,8 @@ def load_3DFuse(control,dir,alpha):
     return model
 
 def load_3DFuse_no_control(dir, alpha, img2img=True):
-    pipeline = merge_no_control_net("runwayml/stable-diffusion-v1-5", dir, alpha, img2img)
+    pipeline,l = merge_no_control_net("runwayml/stable-diffusion-v1-5", dir, alpha, img2img)
+    load_embedding_pipeline(pipeline, l)
     return pipeline
 
 class StableDiffusion(ScoreAdapter):

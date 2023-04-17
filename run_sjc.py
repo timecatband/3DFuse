@@ -15,7 +15,7 @@ from my.config import BaseConf, dispatch, optional_load_config
 from my.utils.seed import seed_everything
 
 from adapt import ScoreAdapter, karras_t_schedule
-from run_img_sampling import GDDPM, SD, StableDiffusion
+from run_img_sampling import SD, StableDiffusion
 from misc import torch_samps_to_imgs
 from pose import PoseConfig
 
@@ -40,7 +40,6 @@ def tsr_stats(tsr):
 
 class SJC(BaseConf):
     family:     str = "sd"
-    gddpm:      GDDPM = GDDPM()
     sd:         SD = SD(
         variant="v1",
         prompt="A high quality photo of a delicious burger",
