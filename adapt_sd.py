@@ -93,11 +93,15 @@ from diffusers import StableDiffusionImg2ImgPipeline
 def merge_no_control_net(path_1: str,
     path_2: str,
     alpha_1: float = 0.5,
+    img2img=True
     ):
 
-    loaded_pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(
-        path_1
-    ).to("cuda")
+    if img2img:
+        loaded_pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(
+            path_1
+        ).to("cuda")
+    else:
+        loaded_pipeline = StableDiffusionPipeline.from_pretrained(path_1).to("cuda")
     print("Path 2: " + path_2)
     tok_dict = patch_pipe(loaded_pipeline, path_2, patch_ti=False)
 
@@ -149,8 +153,8 @@ def load_3DFuse(control,dir,alpha):
     ###############################################################
     return model
 
-def load_3DFuse_no_control(dir, alpha):
-    pipeline = merge_no_control_net("runwayml/stable-diffusion-v1-5", dir, alpha)
+def load_3DFuse_no_control(dir, alpha, img2img=True):
+    pipeline = merge_no_control_net("runwayml/stable-diffusion-v1-5", dir, alpha, img2img)
     return pipeline
 
 class StableDiffusion(ScoreAdapter):
