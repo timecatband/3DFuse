@@ -184,7 +184,7 @@ class SJC_3DFuse(BaseConf):
     emptiness_step:     float = 0.5
     emptiness_multiplier: float = 20.0
 
-    depth_weight:       int = 1e4
+    depth_weight:       int = 0
 
     var_red:     bool = True
     exp_dir:     str = "./results"
@@ -258,7 +258,7 @@ class SJC_3DFuse(BaseConf):
 
 
 
-
+import glob
 
 class NeRF_Fuser:
     def __init__(
@@ -313,6 +313,17 @@ class NeRF_Fuser:
             self.pbar = pbar
             self.hbeat = hbeat
             self.opt.zero_grad()
+            
+            # List files in instance_dir/3d/ckpt
+            ckpt_list = glob.glob(os.path.join(self.exp_instance_dir,'3d','ckpt','*'))
+            # If ckpt exists, load it
+            if len(ckpt_list) > 0:
+                state_dict = torch.load(ckpt_list[0])
+                self.vox.load_state_dict(state_dict)
+                print("Loaded ckpt for voxnerf")
+            else:
+                print("Found no voxnerf ckpt")
+
             for i in range(len(self.poses_)):
                 use_guidance = i % 5 != 0
                 if i < 1000: use_guidance = True
@@ -345,16 +356,16 @@ class NeRF_Fuser:
         # Render NeRF from the original pose
         y1, depth1, ws1 = render_one_view(self.vox, self.aabb, self.H, self.W, k, pose, return_w=True)
         y1 = self.model.decode(y1).float()
-        tvl1 = total_variation_loss(y1)/1000.0 + total_variation_loss(depth1.unsqueeze(0).unsqueeze(0))/1000.0
-        lsl1 = laplacian_sharpness_loss(depth1)/10000.0
+        tvl1 = total_variation_loss(y1)/50000.0 + total_variation_loss(depth1.unsqueeze(0).unsqueeze(0))/50000.0
+        lsl1 = laplacian_sharpness_loss(depth1)/50000.0
         loss1 = tvl1 + lsl1
 
         # Render NeRF from a slightly perturbed pose
         perturbed_pose = random_pose_variation(pose, max_angle_variation)
         y2, depth2, ws2 = render_one_view(self.vox, self.aabb, self.H, self.W, k, perturbed_pose, return_w=True)
         y2 = self.model.decode(y2).float()
-        tvl2 = total_variation_loss(y2)/1000.0 + total_variation_loss(depth2.unsqueeze(0).unsqueeze(0))/1000.0
-        lsl2 = laplacian_sharpness_loss(depth2)/10000.0
+        tvl2 = total_variation_loss(y2)/50000.0 + total_variation_loss(depth2.unsqueeze(0).unsqueeze(0))/50000.0
+        lsl2 = laplacian_sharpness_loss(depth2)/50000.0
         loss2 = tvl2 + lsl2
 
         # Resize depth and depth2 to 512x512
@@ -377,13 +388,25 @@ class NeRF_Fuser:
         scl += F.mse_loss(y2_reprojected, y1)
 
         scl = scl / 2.0
-        scl = scl * 0.1
+        scl = scl * 0.001
 
         # Combine losses
         loss = loss1 + loss2 + scl
+        loss = loss/100.0
         print("Unsupervised loss: ", loss.item())
 
+        if every(self.pbar, percent=1):
+            with torch.no_grad():
+                vis_routine(self.metric, y1, depth1,"",None)
+       
+
         loss.backward()
+
+        self.metric.step()
+        self.pbar.update()
+
+        self.pbar.set_description(str(loss))
+        self.hbeat.beat()
 
 
     def train_one_step(self, pose, angle, k, prompt_prefix, i):
@@ -447,12 +470,12 @@ class NeRF_Fuser:
     
         self.metric.put_scalars(**tsr_stats(y))
 
+      
         if every(self.pbar, percent=2):
             with torch.no_grad():
                 y = self.model.decode(y)
                 vis_routine(self.metric, y, depth,p,depth_map[0])
        
-
         self.metric.step()
         self.pbar.update()
 

@@ -8,7 +8,7 @@ import sys
 
 LORA_WEIGHTS = sys.argv[1]
 def load_lora():
-    model = adapt_sd.load_3DFuse_no_control(LORA_WEIGHTS, 0.5)
+    model = adapt_sd.load_3DFuse_no_control(LORA_WEIGHTS, 0.8)
     # Disable safety checker
     model.safety_checker = None
     return model
@@ -26,7 +26,7 @@ for filename in os.listdir(dir):
         print(filename)
         init_image = Image.open(os.path.join(dir, filename))
         print(filename)
-        images = pipe(prompt=prompt, image=init_image, strength=0.25, guidance_scale=10).images
+        images = pipe(prompt=prompt, image=init_image, strength=0.20, guidance_scale=10).images
         images[0].save(os.path.join("denoise-test", filename))
 
 # Load each image in "denoise-test" and stitch them in to a video
