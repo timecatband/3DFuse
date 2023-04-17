@@ -63,7 +63,7 @@ def merge(path_1: str,
     loaded_pipeline = StableDiffusionPipeline.from_pretrained(
         path_1
     ).to("cpu")
-
+    print("Path 2: " + path_2)
     tok_dict = patch_pipe(loaded_pipeline, path_2, patch_ti=False)
 
     collapse_lora(loaded_pipeline.unet, alpha_1)
@@ -78,7 +78,7 @@ def merge(path_1: str,
     state_dict = lora_convert(_tmp_output, as_half=True)
     # remove the tmp_output folder
     shutil.rmtree(_tmp_output)
-
+    print("Path 2: " + path_2)
     keys = sorted(tok_dict.keys())
     tok_catted = torch.stack([tok_dict[k] for k in keys])
     ret = {
@@ -88,6 +88,26 @@ def merge(path_1: str,
     }
 
     return state_dict, ret
+
+from diffusers import StableDiffusionImg2ImgPipeline
+def merge_no_control_net(path_1: str,
+    path_2: str,
+    alpha_1: float = 0.5,
+    ):
+
+    loaded_pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(
+        path_1
+    ).to("cuda")
+    print("Path 2: " + path_2)
+    tok_dict = patch_pipe(loaded_pipeline, path_2, patch_ti=False)
+
+    collapse_lora(loaded_pipeline.unet, alpha_1)
+    collapse_lora(loaded_pipeline.text_encoder, alpha_1)
+
+    monkeypatch_remove_lora(loaded_pipeline.unet)
+    monkeypatch_remove_lora(loaded_pipeline.text_encoder)
+    
+    return loaded_pipeline
 
 
 
@@ -128,6 +148,10 @@ def load_3DFuse(control,dir,alpha):
     load_embedding(model,l)
     ###############################################################
     return model
+
+def load_3DFuse_no_control(dir, alpha):
+    pipeline = merge_no_control_net("runwayml/stable-diffusion-v1-5", dir, alpha)
+    return pipeline
 
 class StableDiffusion(ScoreAdapter):
     def __init__(self, variant, v2_highres, prompt, scale, precision, dir, alpha=1.0):

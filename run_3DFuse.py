@@ -103,14 +103,12 @@ def laplacian(tensor):
         laplacian_channels.append(laplacian_channel)
     return torch.cat(laplacian_channels, dim=1)
 
-def laplacian_sharpness_loss(rgb, depth):
-    laplacian_rgb = laplacian(rgb)
+def laplacian_sharpness_loss(depth):
     laplacian_depth = laplacian(depth.unsqueeze(0).unsqueeze(0))
     
-    sharpness_loss_rgb = torch.mean(torch.abs(laplacian_rgb))
     sharpness_loss_depth = torch.mean(torch.abs(laplacian_depth))
     
-    total_sharpness_loss = sharpness_loss_rgb #+ sharpness_loss_depth
+    total_sharpness_loss = sharpness_loss_depth
     return total_sharpness_loss
 
 def random_pose_variation(pose, max_angle):
@@ -186,7 +184,7 @@ class SJC_3DFuse(BaseConf):
     emptiness_step:     float = 0.5
     emptiness_multiplier: float = 20.0
 
-    depth_weight:       int = 0
+    depth_weight:       int = 1e4
 
     var_red:     bool = True
     exp_dir:     str = "./results"
@@ -348,7 +346,7 @@ class NeRF_Fuser:
         y1, depth1, ws1 = render_one_view(self.vox, self.aabb, self.H, self.W, k, pose, return_w=True)
         y1 = self.model.decode(y1).float()
         tvl1 = total_variation_loss(y1)/1000.0 + total_variation_loss(depth1.unsqueeze(0).unsqueeze(0))/1000.0
-        lsl1 = laplacian_sharpness_loss(y1, depth1)/500.0
+        lsl1 = laplacian_sharpness_loss(depth1)/10000.0
         loss1 = tvl1 + lsl1
 
         # Render NeRF from a slightly perturbed pose
@@ -356,7 +354,7 @@ class NeRF_Fuser:
         y2, depth2, ws2 = render_one_view(self.vox, self.aabb, self.H, self.W, k, perturbed_pose, return_w=True)
         y2 = self.model.decode(y2).float()
         tvl2 = total_variation_loss(y2)/1000.0 + total_variation_loss(depth2.unsqueeze(0).unsqueeze(0))/1000.0
-        lsl2 = laplacian_sharpness_loss(y2, depth2)/500.0
+        lsl2 = laplacian_sharpness_loss(depth2)/10000.0
         loss2 = tvl2 + lsl2
 
         # Resize depth and depth2 to 512x512
@@ -424,6 +422,9 @@ class NeRF_Fuser:
       #  tvl = total_variation_loss(y)
        # tvl = tvl /1000.0
        # tvl.backward(retain_graph=True)
+        tvl = total_variation_loss(depth.unsqueeze(0).unsqueeze(0))
+        tvl = tvl /10000.0
+        tvl.backward(retain_graph=True)
 
         if self.depth_weight > 0:
             center_depth = depth[7:-7, 7:-7]
@@ -434,9 +435,9 @@ class NeRF_Fuser:
             depth_loss = self.depth_weight * depth_loss
             depth_loss.backward(retain_graph=True)
 
-        #lsl = laplacian_sharpness_loss(y, depth)
-        #lsl = lsl*0.001
-        #lsl.backward(retain_graph=True)
+        lsl = laplacian_sharpness_loss(depth)
+        lsl = lsl*0.0001
+        lsl.backward(retain_graph=True)
 
         emptiness_loss = torch.log(1 + self.emptiness_scale * ws).mean()
         emptiness_loss = self.emptiness_weight * emptiness_loss
