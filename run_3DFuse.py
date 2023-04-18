@@ -327,18 +327,21 @@ class NeRF_Fuser:
             for i in range(len(self.poses_)):
                 use_guidance = i % 5 != 0
                 if i < 1000: use_guidance = True
+                use_guidance = True
+                embed_fr = i/(len(self.poses_)-len(self.poses_)*0.5)
+        
                 if use_guidance:
                     self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
-                                        self.prompt_prefixes_[i], i)
+                                        self.prompt_prefixes_[i], i, embed_fr)
                 else:
                     self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
                 if (i % 2 == 0):
                     self.opt.step()
                     self.opt.zero_grad()
-
-            metric.put_artifact(
-                "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
-            )
+                if (i%100 == 0):
+                    metric.put_artifact(
+                        "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
+                    )
 
             with EventStorage("result"):
                 evaluate(self.model, self.vox, self.poser)
@@ -409,7 +412,7 @@ class NeRF_Fuser:
         self.hbeat.beat()
 
 
-    def train_one_step(self, pose, angle, k, prompt_prefix, i):
+    def train_one_step(self, pose, angle, k, prompt_prefix, i, embed_fr):
         depth_map = render_depth_from_cloud(self.points, 
                                             angle,
                                             self.raster_settings,
@@ -417,7 +420,7 @@ class NeRF_Fuser:
                                             self.calibration_value)
         
         y, depth, ws = render_one_view(self.vox, self.aabb, self.H, self.W, k,
-                                       pose, return_w=True)
+                                       pose, return_w=True, embed_fr = embed_fr)
 
         p = f"{prompt_prefix} {self.model.prompt}"
         score_conds = self.model.prompts_emb([p])
@@ -501,7 +504,6 @@ def evaluate(score_model, vox, poser):
         if fuse.on_break():
             break
 
-        pose = poses[i]
         y, depth = render_one_view(vox, aabb, H, W, K, pose)
         y = score_model.decode(y)
         vis_routine(metric, y, depth,"",None)
@@ -518,7 +520,7 @@ def evaluate(score_model, vox, poser):
 
     metric.step()
 
-def render_one_view(vox, aabb, H, W, K, pose, return_w=False):
+def render_one_view(vox, aabb, H, W, K, pose, return_w=False, embed_fr = 1.0):
     N = H * W
     ro, rd = rays_from_img(H, W, K, pose)
     
@@ -526,7 +528,7 @@ def render_one_view(vox, aabb, H, W, K, pose, return_w=False):
 
     assert len(ro) == N, "for now all pixels must be in"
     ro, rd, t_min, t_max = as_torch_tsrs(vox.device, ro, rd, t_min, t_max)
-    rgbs, depth, weights = render_ray_bundle(vox, ro, rd, t_min, t_max)
+    rgbs, depth, weights = render_ray_bundle(vox, ro, rd, t_min, t_max, embed_fr)
 
     rgbs = rearrange(rgbs, "(h w) c -> 1 c h w", h=H, w=W)
     depth = rearrange(depth, "(h w) 1 -> h w", h=H, w=W)

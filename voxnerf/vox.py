@@ -8,6 +8,123 @@ from my.registry import Registry
 VOXRF_REGISTRY = Registry("VoxRF")
 
 
+# Misc
+img2mse = lambda x, y : torch.mean((x - y) ** 2)
+mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
+to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
+
+
+# Positional encoding (section 5.1)
+class Embedder:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.create_embedding_fn()
+        
+    def create_embedding_fn(self):
+        embed_fns = []
+        d = self.kwargs['input_dims']
+        out_dim = 0
+        if self.kwargs['include_input']:
+            embed_fns.append(lambda x : x)
+            out_dim += d
+            
+        max_freq = self.kwargs['max_freq_log2']
+        N_freqs = self.kwargs['num_freqs']
+        
+        if self.kwargs['log_sampling']:
+            freq_bands = 2.**torch.linspace(0., max_freq, steps=N_freqs)
+        else:
+            freq_bands = torch.linspace(2.**0., 2.**max_freq, steps=N_freqs)
+            
+        for freq in freq_bands:
+            for p_fn in self.kwargs['periodic_fns']:
+                embed_fns.append(lambda x, p_fn=p_fn, freq=freq : p_fn(x * freq))
+                out_dim += d
+                    
+        self.embed_fns = embed_fns
+        self.out_dim = out_dim
+        
+    def embed(self, inputs, embed_fr = 1.0):
+        arr = []
+        num_embed_fns = len(self.embed_fns)
+        for i in range(num_embed_fns):
+            if i < num_embed_fns*embed_fr or i == 0:
+                arr.append(self.embed_fns[i](inputs))
+            else:
+                arr.append(torch.zeros_like(arr[-1]))
+        return torch.cat(arr, -1)
+
+
+def get_embedder(multires, i=0):
+    if i == -1:
+        return nn.Identity(), 3
+    
+    embed_kwargs = {
+                'include_input' : True,
+                'input_dims' : 3,
+                'max_freq_log2' : multires-1,
+                'num_freqs' : multires,
+                'log_sampling' : True,
+                'periodic_fns' : [torch.sin, torch.cos],
+    }
+    
+    embedder_obj = Embedder(**embed_kwargs)
+    embed = lambda x, embed_fr, eo=embedder_obj : eo.embed(x, embed_fr)
+    return embed, embedder_obj.out_dim
+
+
+
+class VanillaNeRF(nn.Module):
+    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[]):
+        """ 
+        """
+        super(VanillaNeRF, self).__init__()
+        self.D = D
+        self.W = W
+        self.input_ch = input_ch
+        self.input_ch_views = input_ch_views
+        self.skips = skips
+        
+        self.pts_linears = nn.ModuleList(
+            [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
+    
+        self.output_linear = nn.Linear(W, output_ch)
+
+    def forward(self, x):
+        print("Model input shape: " + str(x.shape))
+        print("Input channels: " + str(self.input_ch))
+        input_pts = x
+        h = input_pts
+        for i, l in enumerate(self.pts_linears):
+            h = self.pts_linears[i](h)
+            h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([input_pts, h], -1)
+
+            outputs = self.output_linear(h)
+
+        return outputs
+
+    def opt_params(self):
+        groups = []
+        print("Set opt params")
+        for name, param in self.named_parameters():
+            grp = {"params": param, "lr": 5e-4}
+            groups.append(grp)
+    
+        return groups
+
+    def annealed_opt_params(self, base_lr, σ):
+        groups = []
+        print("Annealed opt params")
+        for name, param in self.named_parameters():
+            grp = {"params": param, "lr": 5e-4 * σ}
+            groups.append(grp)
+            
+        return groups   
+
+
+
 def to_grid_samp_coords(xyz_sampled, aabb):
     # output range is [-1, 1]
     aabbSize = aabb[1] - aabb[0]
@@ -56,6 +173,8 @@ class VoxRF(nn.Module):
         self.feats2color = lambda feats: torch.sigmoid(feats)
 
         self.d_scale = torch.nn.Parameter(torch.tensor(0.0))
+        self.embed_fn, self.embed_dim = get_embedder(10, 0)
+        self.app_net = VanillaNeRF(input_ch=self.embed_dim, output_ch=4, D=6, W=196, skips=[])
 
     @property
     def device(self):
@@ -76,12 +195,10 @@ class VoxRF(nn.Module):
         σ = F.softplus(σ + self.density_shift)
         return σ
 
-    def compute_app_feats(self, xyz_sampled):
-        xyz_sampled = to_grid_samp_coords(xyz_sampled, self.aabb)
-        n = xyz_sampled.shape[0]
-        xyz_sampled = xyz_sampled.reshape(1, n, 1, 1, 3)
-        feats = F.grid_sample(self.color, xyz_sampled).view(self.c, n)
-        feats = feats.T
+    def compute_app_feats_vanilla(self, xyz_sampled, xyz_weights, embed_fr=1.0):
+        input = xyz_sampled#torch.cat((xyz_sampled, xyz_weights.unsqueeze(-1)), -1)
+        input = self.embed_fn(input, embed_fr=embed_fr)
+        feats = self.app_net(input)
         return feats
 
     def compute_bg(self, uv):
@@ -184,6 +301,9 @@ class V_SJC(VoxRF):
             if name in ["density"]:
                 # grp["lr"] = 0.
                 pass
+            if "app_net" in name:
+                print("Initializing learning rate for app_net to 5e-4")
+                grp["lr"] = 5e-4
             groups.append(grp)
         return groups
 
@@ -198,6 +318,9 @@ class V_SJC(VoxRF):
                 grp["lr"] = 0.
             if name in ["color"]:
                 grp["lr"] = base_lr * σ
+            if "app_net" in name:
+                grp["lr"] = 5e-4 * σ
+                print("Anneling app_net")
             if name in ["bg"]:
                 grp["lr"] = 0.01
             groups.append(grp)

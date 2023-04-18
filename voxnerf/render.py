@@ -96,7 +96,7 @@ def mask_back_fill(tsr, N, inds, base_value=1.0):
     return canvas
 
 
-def render_one_view(model, aabb, H, W, K, pose):
+def render_one_view(model, aabb, H, W, K, pose, embed_fr=1.0):
     N = H * W
     bs = max(W * 5, 4096)  # render 5 rows; original batch size 4096, now 4000;
 
@@ -117,7 +117,7 @@ def render_one_view(model, aabb, H, W, K, pose):
             s = i * bs
             e = min(n, s + bs)
             _rgbs, _depth, _ = render_ray_bundle(
-                model, ro[s:e], rd[s:e], t_min[s:e], t_max[s:e]
+                model, ro[s:e], rd[s:e], t_min[s:e], t_max[s:e], embed_fr=embed_fr
             )
             rgbs[s:e] = _rgbs
             depth[s:e] = _depth
@@ -143,7 +143,7 @@ def scene_box_filter(ro, rd, aabb):
     return ro, rd, t_min, t_max, intsct_inds
 
 
-def render_ray_bundle(model, ro, rd, t_min, t_max):
+def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0):
     """
     The working shape is (k, n, 3) where k is num of samples per ray, n the ray batch size
     During integration the reduction is applied on k
@@ -175,12 +175,17 @@ def render_ray_bundle(model, ro, rd, t_min, t_max):
         smp_pts = pts[mask]
 
     σ = torch.zeros(k, n, device=ro.device)
-    σ[mask] = model.compute_density_feats(smp_pts)
+    σ[mask] = smp_pts_density = model.compute_density_feats(smp_pts)
     weights = volume_rend_weights(σ, step_size)
     mask = weights > model.ray_march_weight_thres
     smp_pts = pts[mask]
-
-    app_feats = model.compute_app_feats(smp_pts)
+    density_pts = weights[mask]
+    print("smp_pts shape: " + str(smp_pts.shape))
+    print("weights: " + str(density_pts.shape))
+    if True:
+        app_feats = model.compute_app_feats_vanilla(smp_pts, density_pts, embed_fr)
+    else:
+        app_feats = model.compute_app_feats(smp_pts)
     # viewdirs = rd.view(1, n, 3).expand(k, n, 3)[mask]  # ray dirs for each point
     # additional wild factors here as in nerf-w; wild factors are optimizable
     c_dim = app_feats.shape[-1]
@@ -192,6 +197,7 @@ def render_ray_bundle(model, ro, rd, t_min, t_max):
 
     rgbs = (weights * colors).sum(dim=0)  # [n, 3]
 
+    #model.blend_bg_texture = False
     if model.blend_bg_texture:
         uv = spherical_xyz_to_uv(rd)
         bg_feats = model.compute_bg(uv)
