@@ -281,6 +281,7 @@ class NeRF_Fuser:
         self.exp_instance_dir = exp_instance_dir
         self.points = points
         self.is_gradio = is_gradio
+        self.n_steps = 50000
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
@@ -470,11 +471,25 @@ class NeRF_Fuser:
        # lsl = lsl*0.0001
        # lsl.backward(retain_graph=True)
 
-        emptiness_loss = torch.log(1 + self.emptiness_scale * ws).mean()
-        emptiness_loss = self.emptiness_weight * emptiness_loss
-        if self.emptiness_step * self.n_steps <= i:
-            emptiness_loss *= self.emptiness_multiplier
-        emptiness_loss.backward()
+        #emptiness_loss = torch.log(1 + self.emptiness_scale * ws).mean()
+        #emptiness_loss = self.emptiness_weight * emptiness_loss
+        #if self.emptiness_step * self.n_steps <= i:
+        #    emptiness_loss *= self.emptiness_multiplier
+        #emptiness_loss.backward()
+
+        distance_to_zero = torch.abs(ws - 0)
+        distance_to_one = torch.abs(ws - 1)
+        min_distance = torch.min(distance_to_zero, distance_to_one)
+        alpha_loss = torch.mean(min_distance)
+        alpha_loss.backward(retain_graph=True)
+
+        print("Density grad norm: ", self.vox.density.grad.norm())
+        # Print gradient norm of all params in the app_net
+        for param in self.vox.app_net.parameters():
+            print("App net grad norm: ", param.grad.norm())
+        self.vox.density.grad /= 10.0
+        if (self.vox.density.grad.norm().item() > 1000):
+            self.vox.density.grad /= 10.0
     
         self.metric.put_scalars(**tsr_stats(y))
 
