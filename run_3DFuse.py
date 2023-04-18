@@ -171,7 +171,7 @@ class SJC_3DFuse(BaseConf):
         alpha=0.3
     )
     lr:         float = 0.05
-    n_steps:    int = 10000
+    n_steps:    int = 50000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
         blend_bg_texture=False , bg_texture_hw=4,
@@ -324,25 +324,26 @@ class NeRF_Fuser:
                 print("Loaded ckpt for voxnerf")
             else:
                 print("Found no voxnerf ckpt")
-
-            for i in range(len(self.poses_)):
-                use_guidance = i % 5 != 0
-                if i < 1000: use_guidance = True
-                use_guidance = True
-                embed_fr = i/(len(self.poses_)-len(self.poses_)*0.5)
-        
-                if use_guidance:
-                    self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
-                                        self.prompt_prefixes_[i], i, embed_fr)
-                else:
-                    self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
-                if (i % 2 == 0):
-                    self.opt.step()
-                    self.opt.zero_grad()
-                if (i%100 == 0):
-                    metric.put_artifact(
-                        "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
-                    )
+            print("Starting training poses_ length: ", len(self.poses_))
+            for j in range(5):
+                for i in range(len(self.poses_)):
+                    use_guidance = i % 5 != 0
+                    if i < 1000: use_guidance = True
+                    use_guidance = True
+                    embed_fr = i/(len(self.poses_)-len(self.poses_)*0.5)
+            
+                    if use_guidance:
+                        self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
+                                            self.prompt_prefixes_[i], i, embed_fr)
+                    else:
+                        self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
+                    if (i % 2 == 0):
+                        self.opt.step()
+                        self.opt.zero_grad()
+                    if (i%1000 == 0):
+                        metric.put_artifact(
+                            "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
+                        )
 
             with EventStorage("result"):
                 evaluate(self.model, self.vox, self.poser)
@@ -494,7 +495,7 @@ class NeRF_Fuser:
         self.metric.put_scalars(**tsr_stats(y))
 
       
-        if every(self.pbar, percent=2):
+        if every(self.pbar, percent=1):
             with torch.no_grad():
                 y = self.model.decode(y)
                 vis_routine(self.metric, y, depth,p,depth_map[0])
