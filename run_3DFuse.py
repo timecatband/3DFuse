@@ -330,7 +330,8 @@ class NeRF_Fuser:
                     use_guidance = i % 5 != 0
                     if i < 1000: use_guidance = True
                     use_guidance = True
-                    embed_fr = i/(len(self.poses_)-len(self.poses_)*0.5)
+                    # TODO: Must fix
+                    embed_fr = (i*j)/(self.n_steps-self.n_steps*0.5)
             
                     if use_guidance:
                         self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
