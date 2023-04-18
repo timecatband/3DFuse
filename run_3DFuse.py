@@ -419,7 +419,7 @@ class NeRF_Fuser:
                                             device_glb,
                                             self.calibration_value)
         
-        y, depth, ws = render_one_view(self.vox, self.aabb, self.H, self.W, k,
+        y, depth, ws, weight_entropy = render_one_view(self.vox, self.aabb, self.H, self.W, k,
                                        pose, return_w=True, embed_fr = embed_fr)
 
         p = f"{prompt_prefix} {self.model.prompt}"
@@ -451,6 +451,11 @@ class NeRF_Fuser:
         tvl = total_variation_loss(depth.unsqueeze(0).unsqueeze(0))
         tvl = tvl /10000.0
         tvl.backward(retain_graph=True)
+
+        #Entropy loss. TODO: Need a real global step
+        lambda_entropy = 1e-3 * min(1, 2 * i/self.n_steps)
+        entropy_loss = lambda_entropy * weight_entropy
+        entropy_loss.backward()
 
         if self.depth_weight > 0:
             center_depth = depth[7:-7, 7:-7]
@@ -503,7 +508,7 @@ def evaluate(score_model, vox, poser):
     for i in (pbar := tqdm(range(num_imgs))):
         if fuse.on_break():
             break
-
+        pose = poses[i]
         y, depth = render_one_view(vox, aabb, H, W, K, pose)
         y = score_model.decode(y)
         vis_routine(metric, y, depth,"",None)
@@ -532,8 +537,11 @@ def render_one_view(vox, aabb, H, W, K, pose, return_w=False, embed_fr = 1.0):
 
     rgbs = rearrange(rgbs, "(h w) c -> 1 c h w", h=H, w=W)
     depth = rearrange(depth, "(h w) 1 -> h w", h=H, w=W)
+    alphas = weights.clamp(1e-5, 1 - 1e-5)
+    # alphas = alphas ** 2 # skewed entropy, favors 0 over 1
+    weight_entropy = (- alphas * torch.log2(alphas) - (1 - alphas) * torch.log2(1 - alphas)).mean() 
     if return_w:
-        return rgbs, depth, weights
+        return rgbs, depth, weights, weight_entropy
     else:
         return rgbs, depth
 

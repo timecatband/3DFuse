@@ -111,14 +111,19 @@ def render_one_view(model, aabb, H, W, K, pose, embed_fr=1.0):
     ro, rd, t_min, t_max = as_torch_tsrs(dev, ro, rd, t_min, t_max)
     rgbs = torch.zeros(n, 3, device=dev)
     depth = torch.zeros(n, 1, device=dev)
-
+    weight_entropy = 0
     with torch.no_grad():
         for i in range(int(np.ceil(n / bs))):
             s = i * bs
             e = min(n, s + bs)
-            _rgbs, _depth, _ = render_ray_bundle(
+            _rgbs, _depth, weights = render_ray_bundle(
                 model, ro[s:e], rd[s:e], t_min[s:e], t_max[s:e], embed_fr=embed_fr
             )
+            # Regularize alpha entropy
+            alphas = weights.clamp(1e-5, 1 - 1e-5)
+            # alphas = alphas ** 2 # skewed entropy, favors 0 over 1
+            weight_entropy = weight_entropy + (- alphas * torch.log2(alphas) - (1 - alphas) * torch.log2(1 - alphas)).mean()
+            
             rgbs[s:e] = _rgbs
             depth[s:e] = _depth
 
@@ -127,7 +132,7 @@ def render_one_view(model, aabb, H, W, K, pose, embed_fr=1.0):
     base_color = 1.0  # empty region needs to be white
     rgbs = mask_back_fill(rgbs, N, intsct_inds, base_color).reshape(H, W, 3)
     depth = mask_back_fill(depth, N, intsct_inds, base_color).reshape(H, W)
-    return rgbs, depth
+    return rgbs, depth, weight_entropy
 
 
 def scene_box_filter(ro, rd, aabb):
