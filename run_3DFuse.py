@@ -449,13 +449,13 @@ class NeRF_Fuser:
        # tvl = tvl /1000.0
        # tvl.backward(retain_graph=True)
         tvl = total_variation_loss(depth.unsqueeze(0).unsqueeze(0))
-        tvl = tvl /10000.0
+        tvl = tvl / 10000.0
         tvl.backward(retain_graph=True)
 
         #Entropy loss. TODO: Need a real global step
         lambda_entropy = 1e-3 * min(1, 2 * i/self.n_steps)
         entropy_loss = lambda_entropy * weight_entropy
-        entropy_loss.backward()
+        entropy_loss.backward(retain_graph=True)
 
         if self.depth_weight > 0:
             center_depth = depth[7:-7, 7:-7]
@@ -466,9 +466,9 @@ class NeRF_Fuser:
             depth_loss = self.depth_weight * depth_loss
             depth_loss.backward(retain_graph=True)
 
-        lsl = laplacian_sharpness_loss(depth)
-        lsl = lsl*0.0001
-        lsl.backward(retain_graph=True)
+       # lsl = laplacian_sharpness_loss(depth)
+       # lsl = lsl*0.0001
+       # lsl.backward(retain_graph=True)
 
         emptiness_loss = torch.log(1 + self.emptiness_scale * ws).mean()
         emptiness_loss = self.emptiness_weight * emptiness_loss
