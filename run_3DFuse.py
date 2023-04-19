@@ -332,13 +332,16 @@ class NeRF_Fuser:
                     use_guidance = True
                     # TODO: Must fix
                     embed_fr = (i+j*len(self.poses_))/(self.n_steps-self.n_steps*0.5)
-            
+                                
                     if use_guidance:
                         self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
                                             self.prompt_prefixes_[i], i, embed_fr)
                     else:
                         self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
-                    if (i % 2 == 0):
+                    if (i % 1 == 0):
+                        for g in self.opt.param_groups:
+                            g['lr'] *= .99995
+                            
                         self.opt.step()
                         self.opt.zero_grad()
                     if (i%1000 == 0):
@@ -479,11 +482,11 @@ class NeRF_Fuser:
         #    emptiness_loss *= self.emptiness_multiplier
         #emptiness_loss.backward()
 
-        distance_to_zero = torch.abs(ws - 0)
-        distance_to_one = torch.abs(ws - 1)
-        min_distance = torch.min(distance_to_zero, distance_to_one)
-        alpha_loss = torch.mean(min_distance)
-        alpha_loss.backward(retain_graph=True)
+       # distance_to_zero = torch.abs(ws - 0)
+       # distance_to_one = torch.abs(ws - 1)
+       # min_distance = torch.min(distance_to_zero, distance_to_one)
+       # alpha_loss = torch.mean(min_distance)
+       # alpha_loss.backward(retain_graph=True)
 
         print("Density grad norm: ", self.vox.density.grad.norm())
         # Print gradient norm of all params in the app_net
@@ -491,7 +494,7 @@ class NeRF_Fuser:
             print("App net grad norm: ", param.grad.norm())
         self.vox.density.grad /= 10.0
         if (self.vox.density.grad.norm().item() > 1000):
-            self.vox.density.grad /= 10.0
+            self.vox.density.grad /= 50.0
     
         self.metric.put_scalars(**tsr_stats(y))
 
