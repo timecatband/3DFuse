@@ -303,7 +303,7 @@ class V_SJC(VoxRF):
                 pass
             if "app_net" in name:
                 print("Initializing learning rate for app_net to 5e-4")
-                grp["lr"] = 5e-4
+                grp["lr"] = 5e-3
             groups.append(grp)
         return groups
 
