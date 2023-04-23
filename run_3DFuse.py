@@ -171,7 +171,7 @@ class SJC_3DFuse(BaseConf):
         alpha=0.3
     )
     lr:         float = 0.05
-    n_steps:    int = 50000
+    n_steps:    int = 20000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
         blend_bg_texture=False , bg_texture_hw=4,
@@ -281,7 +281,7 @@ class NeRF_Fuser:
         self.exp_instance_dir = exp_instance_dir
         self.points = points
         self.is_gradio = is_gradio
-        self.n_steps = 50000
+        self.n_steps = 20000
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
@@ -331,11 +331,11 @@ class NeRF_Fuser:
                     if i < 1000: use_guidance = True
                     use_guidance = True
                     # TODO: Must fix
-                    embed_fr = (i+j*len(self.poses_))/(self.n_steps-self.n_steps*0.5)
+                    embed_fr = (i+j*len(self.poses_))/(self.n_steps-self.n_steps*0.7)
                                 
                     if use_guidance:
                         self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
-                                            self.prompt_prefixes_[i], i, embed_fr)
+                                            self.prompt_prefixes_[i], i+j*len(self.poses_), embed_fr)
                     else:
                         self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
                     if (i % 1 == 0):
@@ -432,7 +432,11 @@ class NeRF_Fuser:
         score_conds = self.model.prompts_emb([p])
             
         with torch.no_grad():
-            chosen_σs = np.random.choice(self.ts, self.bs, replace=False)
+            ts_frac = int((len(self.ts))*embed_fr)
+            if ts_frac == 0: ts_frac = 1
+            #chosen_σs = np.random.choice(self.ts[(ts_frac-1):ts_frac], self.bs, replace=False)
+            chosen_σs = np.random.choice((11.91*(1-(i/self.n_steps))+0.09,), self.bs, replace=False)
+            print("Ts: ", self.ts)
             chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
             chosen_σs = torch.as_tensor(chosen_σs, device=self.model.device, dtype=torch.float32)
 
@@ -499,7 +503,7 @@ class NeRF_Fuser:
         self.metric.put_scalars(**tsr_stats(y))
 
       
-        if every(self.pbar, percent=1):
+        if every(self.pbar, percent=0.5):
             with torch.no_grad():
                 y = self.model.decode(y)
                 vis_routine(self.metric, y, depth,p,depth_map[0])

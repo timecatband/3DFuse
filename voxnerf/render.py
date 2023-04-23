@@ -189,6 +189,7 @@ def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0):
     print("weights: " + str(density_pts.shape))
     if True:
         app_feats = model.compute_app_feats_vanilla(smp_pts, density_pts, embed_fr)
+    #    app_feats = app_feats + model.compute_app_feats(smp_pts)
     else:
         app_feats = model.compute_app_feats(smp_pts)
     # viewdirs = rd.view(1, n, 3).expand(k, n, 3)[mask]  # ray dirs for each point

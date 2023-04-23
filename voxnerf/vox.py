@@ -195,6 +195,13 @@ class VoxRF(nn.Module):
         σ = F.softplus(σ + self.density_shift)
         return σ
 
+    def compute_app_feats(self, xyz_sampled):
+        xyz_sampled = to_grid_samp_coords(xyz_sampled, self.aabb)
+        n = xyz_sampled.shape[0]
+        xyz_sampled = xyz_sampled.reshape(1, n, 1, 1, 3)
+        σ = F.grid_sample(self.color, xyz_sampled).view(n)
+        return σ
+
     def compute_app_feats_vanilla(self, xyz_sampled, xyz_weights, embed_fr=1.0):
         input = xyz_sampled#torch.cat((xyz_sampled, xyz_weights.unsqueeze(-1)), -1)
         input = self.embed_fn(input, embed_fr=embed_fr)
