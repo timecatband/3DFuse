@@ -171,7 +171,7 @@ class SJC_3DFuse(BaseConf):
         alpha=0.3
     )
     lr:         float = 0.05
-    n_steps:    int = 20000
+    n_steps:    int = 30000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
         blend_bg_texture=False , bg_texture_hw=4,
@@ -281,7 +281,7 @@ class NeRF_Fuser:
         self.exp_instance_dir = exp_instance_dir
         self.points = points
         self.is_gradio = is_gradio
-        self.n_steps = 20000
+        self.n_steps = 30000
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
@@ -330,6 +330,10 @@ class NeRF_Fuser:
                     use_guidance = i % 5 != 0
                     if i < 1000: use_guidance = True
                     use_guidance = True
+                    if (i % 1 == 0):
+                        for g in self.opt.param_groups:
+                            g['lr'] *= .99998
+
                     # TODO: Must fix
                     embed_fr = (i+j*len(self.poses_))/(self.n_steps-self.n_steps*0.7)
                                 
@@ -338,12 +342,9 @@ class NeRF_Fuser:
                                             self.prompt_prefixes_[i], i+j*len(self.poses_), embed_fr)
                     else:
                         self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
-                    if (i % 1 == 0):
-                        for g in self.opt.param_groups:
-                            g['lr'] *= .99995
-                            
-                        self.opt.step()
-                        self.opt.zero_grad()
+                                                
+                    self.opt.step()
+                    self.opt.zero_grad()
                     if (i%1000 == 0):
                         metric.put_artifact(
                             "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
@@ -435,8 +436,10 @@ class NeRF_Fuser:
             ts_frac = int((len(self.ts))*embed_fr)
             if ts_frac == 0: ts_frac = 1
             #chosen_σs = np.random.choice(self.ts[(ts_frac-1):ts_frac], self.bs, replace=False)
-            chosen_σs = np.random.choice((11.91*(1-(i/self.n_steps))+0.09,), self.bs, replace=False)
-            print("Ts: ", self.ts)
+            noise_amount = 11.91*(1-(i/self.n_steps))
+            chosen_σs = np.random.choice((noise_amount,), self.bs, replace=False)
+            chosen_σs = chosen_σs.clip(1.1,12)
+            print("Chosen σ: ", chosen_σs)
             chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
             chosen_σs = torch.as_tensor(chosen_σs, device=self.model.device, dtype=torch.float32)
 
@@ -447,6 +450,7 @@ class NeRF_Fuser:
 
             Ds = self.model.denoise(zs, chosen_σs,depth_map.unsqueeze(dim=0),**score_conds)
 
+            chosen_σs = chosen_σs.clamp(1,11.91)
             if self.var_red:
                 grad = (Ds - y) / chosen_σs
             else:
@@ -492,10 +496,10 @@ class NeRF_Fuser:
        # alpha_loss = torch.mean(min_distance)
        # alpha_loss.backward(retain_graph=True)
 
-        print("Density grad norm: ", self.vox.density.grad.norm())
+        #print("Density grad norm: ", self.vox.density.grad.norm())
         # Print gradient norm of all params in the app_net
-        for param in self.vox.app_net.parameters():
-            print("App net grad norm: ", param.grad.norm())
+        #for param in self.vox.app_net.parameters():
+         #   print("App net grad norm: ", param.grad.norm())
         self.vox.density.grad /= 10.0
         if (self.vox.density.grad.norm().item() > 1000):
             self.vox.density.grad /= 50.0
