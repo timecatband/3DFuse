@@ -171,7 +171,7 @@ class SJC_3DFuse(BaseConf):
         alpha=0.3
     )
     lr:         float = 0.05
-    n_steps:    int = 70000
+    n_steps:    int = 30000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
         blend_bg_texture=False , bg_texture_hw=4,
@@ -281,7 +281,7 @@ class NeRF_Fuser:
         self.exp_instance_dir = exp_instance_dir
         self.points = points
         self.is_gradio = is_gradio
-        self.n_steps = 70000
+        self.n_steps = 30000
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
