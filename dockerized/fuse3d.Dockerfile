@@ -30,6 +30,11 @@ RUN pip install git+https://github.com/arogozhnikov/einops.git
 # WORKDIR /home/fuse3d/weights
 # RUN wget https://huggingface.co/jyseo/3DFuse_weights/resolve/main/models/3DFuse_sparse_depth_injector.ckpt
 
+# install missing deps, but dont want to have to redo the cached pip layer above :/
+USER root
+RUN apt-get install ffmpeg libsm6 libxext6  -y
+USER fuser
+
 WORKDIR /home/fuse3d/
 COPY . .
 
