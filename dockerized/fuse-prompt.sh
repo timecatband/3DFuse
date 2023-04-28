@@ -1,0 +1,1 @@
+./run.sh "a sleek solarpunk spaceship in the style of the millenium falcon but nicer" "spaceship"
