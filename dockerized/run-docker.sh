@@ -1,4 +1,4 @@
-docker build -t fuse3d -f ./dockerized/fuse3d.Dockerfile .
+#docker build -t fuse3d -f ./dockerized/fuse3d.Dockerfile .
 
 #-p 8080:8080 \
 
