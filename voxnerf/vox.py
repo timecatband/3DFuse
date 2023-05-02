@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import tinycudann as tcnn
 from einops import rearrange
 from my.registry import Registry
 
@@ -173,8 +174,18 @@ class VoxRF(nn.Module):
         self.feats2color = lambda feats: torch.sigmoid(feats)
 
         self.d_scale = torch.nn.Parameter(torch.tensor(0.0))
-        self.embed_fn, self.embed_dim = get_embedder(10, 0)
-        self.app_net = VanillaNeRF(input_ch=self.embed_dim, output_ch=4, D=6, W=196, skips=[])
+#        self.embed_fn, self.embed_dim = get_embedder(10, 0)
+        self.embed_dim = 32
+        self.bound = 5
+        per_level_scale = np.exp2(np.log2(2048*self.bound/16)/(16-1))
+        self.embed_fn = tcnn.Encoding(n_input_dims=3, encoding_config={"otype":"HashGrid",
+                                                                       "n_levels": 16,
+                                                                       "n_features_per_level": 2,
+                                                                       "log2_hashmap_size": 19,
+                                                                       "base_resolution": 16,
+                                                                       "per_level_scale": per_level_scale},
+                                      dtype=torch.float32)
+        self.app_net = VanillaNeRF(input_ch=self.embed_dim, output_ch=4, D=4, W=64, skips=[])
 
     @property
     def device(self):
@@ -194,17 +205,20 @@ class VoxRF(nn.Module):
         σ = σ * torch.exp(self.d_scale)
         σ = F.softplus(σ + self.density_shift)
         return σ
+    
 
     def compute_app_feats(self, xyz_sampled):
         xyz_sampled = to_grid_samp_coords(xyz_sampled, self.aabb)
         n = xyz_sampled.shape[0]
         xyz_sampled = xyz_sampled.reshape(1, n, 1, 1, 3)
-        σ = F.grid_sample(self.color, xyz_sampled).view(n)
-        return σ
+        feats = F.grid_sample(self.color, xyz_sampled).view(self.c, n)
+        feats = feats.T
+        return feats
 
     def compute_app_feats_vanilla(self, xyz_sampled, xyz_weights, embed_fr=1.0):
         input = xyz_sampled#torch.cat((xyz_sampled, xyz_weights.unsqueeze(-1)), -1)
-        input = self.embed_fn(input, embed_fr=embed_fr)
+        input = (input+self.bound)/(2*self.bound)
+        input = self.embed_fn(input)#, embed_fr=embed_fr)
         feats = self.app_net(input)
         return feats
 
@@ -311,6 +325,9 @@ class V_SJC(VoxRF):
             if "app_net" in name:
                 print("Initializing learning rate for app_net to 5e-4")
                 grp["lr"] = 5e-3
+            if "embed_fn" in name:
+                print("Initializing embedding parameters")
+                grp["lr"] = 5e-2
             groups.append(grp)
         return groups
 

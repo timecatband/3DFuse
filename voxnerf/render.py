@@ -148,7 +148,7 @@ def scene_box_filter(ro, rd, aabb):
     return ro, rd, t_min, t_max, intsct_inds
 
 
-def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0):
+def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0, use_app_net=False):
     """
     The working shape is (k, n, 3) where k is num of samples per ray, n the ray batch size
     During integration the reduction is applied on k
@@ -187,11 +187,11 @@ def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0):
     density_pts = weights[mask]
     print("smp_pts shape: " + str(smp_pts.shape))
     print("weights: " + str(density_pts.shape))
-    if True:
-        app_feats = model.compute_app_feats_vanilla(smp_pts, density_pts, embed_fr)
-    #    app_feats = app_feats + model.compute_app_feats(smp_pts)
-    else:
-        app_feats = model.compute_app_feats(smp_pts)
+    
+    app_feats = model.compute_app_feats(smp_pts)
+    if use_app_net:
+        app_feats += model.compute_app_feats_vanilla(smp_pts, density_pts, embed_fr)
+        
     # viewdirs = rd.view(1, n, 3).expand(k, n, 3)[mask]  # ray dirs for each point
     # additional wild factors here as in nerf-w; wild factors are optimizable
     c_dim = app_feats.shape[-1]

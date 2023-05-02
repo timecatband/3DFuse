@@ -171,7 +171,7 @@ class SJC_3DFuse(BaseConf):
         alpha=0.3
     )
     lr:         float = 0.05
-    n_steps:    int = 30000
+    n_steps:    int = 2000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
         blend_bg_texture=False , bg_texture_hw=4,
@@ -281,7 +281,7 @@ class NeRF_Fuser:
         self.exp_instance_dir = exp_instance_dir
         self.points = points
         self.is_gradio = is_gradio
-        self.n_steps = 30000
+        self.n_steps = 2000
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
@@ -332,7 +332,7 @@ class NeRF_Fuser:
                     use_guidance = True
                     if (i % 1 == 0):
                         for g in self.opt.param_groups:
-                            g['lr'] *= .99998
+                            g['lr'] *= .999998
 
                     # TODO: Must fix
                     embed_fr = (i+j*len(self.poses_))/(self.n_steps-self.n_steps*0.7)
@@ -426,8 +426,17 @@ class NeRF_Fuser:
                                             device_glb,
                                             self.calibration_value)
         
+        render_app_net = False
+        if i > 500:
+            render_app_net = True
+        if i > 500 and i < 1000:
+            self.vox.color.requires_grad = False
+            #self.vox.density.requires_grad = False
+        else:
+            self.vox.color.requires_grad = True
+            #self.vox.density.requires_grad = True
         y, depth, ws, weight_entropy = render_one_view(self.vox, self.aabb, self.H, self.W, k,
-                                       pose, return_w=True, embed_fr = embed_fr)
+                                       pose, return_w=True, embed_fr = embed_fr, use_app_net = render_app_net)
 
         p = f"{prompt_prefix} {self.model.prompt}"
         score_conds = self.model.prompts_emb([p])
@@ -436,7 +445,7 @@ class NeRF_Fuser:
             ts_frac = int((len(self.ts))*embed_fr)
             if ts_frac == 0: ts_frac = 1
             #chosen_σs = np.random.choice(self.ts[(ts_frac-1):ts_frac], self.bs, replace=False)
-            noise_amount = 11.91*(1-(i/self.n_steps))
+            noise_amount = 3.00*(1-(i/self.n_steps))
             chosen_σs = np.random.choice((noise_amount,), self.bs, replace=False)
             chosen_σs = chosen_σs.clip(1.1,12)
             print("Chosen σ: ", chosen_σs)
@@ -471,6 +480,7 @@ class NeRF_Fuser:
         entropy_loss = lambda_entropy * weight_entropy
         entropy_loss.backward(retain_graph=True)
 
+        #self.depth_weight = 3e-4
         if self.depth_weight > 0:
             center_depth = depth[7:-7, 7:-7]
             border_depth_mean = (depth.sum() - center_depth.sum()) / (64*64-50*50)
@@ -500,14 +510,15 @@ class NeRF_Fuser:
         # Print gradient norm of all params in the app_net
         #for param in self.vox.app_net.parameters():
          #   print("App net grad norm: ", param.grad.norm())
-        self.vox.density.grad /= 10.0
-        if (self.vox.density.grad.norm().item() > 1000):
-            self.vox.density.grad /= 50.0
+        if (self.vox.density.grad != None):
+            self.vox.density.grad /= 10.0
+            if (self.vox.density.grad.norm().item() > 1000):
+                self.vox.density.grad /= 50.0
     
         self.metric.put_scalars(**tsr_stats(y))
 
       
-        if every(self.pbar, percent=0.5):
+        if i % 50 == 0:
             with torch.no_grad():
                 y = self.model.decode(y)
                 vis_routine(self.metric, y, depth,p,depth_map[0])
@@ -553,7 +564,7 @@ def evaluate(score_model, vox, poser):
 
     metric.step()
 
-def render_one_view(vox, aabb, H, W, K, pose, return_w=False, embed_fr = 1.0):
+def render_one_view(vox, aabb, H, W, K, pose, return_w=False, embed_fr = 1.0, use_app_net = False):
     N = H * W
     ro, rd = rays_from_img(H, W, K, pose)
     
@@ -561,7 +572,7 @@ def render_one_view(vox, aabb, H, W, K, pose, return_w=False, embed_fr = 1.0):
 
     assert len(ro) == N, "for now all pixels must be in"
     ro, rd, t_min, t_max = as_torch_tsrs(vox.device, ro, rd, t_min, t_max)
-    rgbs, depth, weights = render_ray_bundle(vox, ro, rd, t_min, t_max, embed_fr)
+    rgbs, depth, weights = render_ray_bundle(vox, ro, rd, t_min, t_max, embed_fr, use_app_net)
 
     rgbs = rearrange(rgbs, "(h w) c -> 1 c h w", h=H, w=W)
     depth = rearrange(depth, "(h w) 1 -> h w", h=H, w=W)
