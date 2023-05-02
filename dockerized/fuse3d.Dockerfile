@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.0.0-devel-ubuntu22.04
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
 
 # RUN apk update
 # RUN apk add git
@@ -25,7 +25,7 @@ RUN pip install xformers
 RUN pip install pytorch-lightning==1.8.3.post0
 RUN pip install git+https://github.com/arogozhnikov/einops.git
 
-# should get weights locally instead probably, they will get copied into container below
+# should get weights locally instead probably, they will get copied into container below, or passed in with -v map at docker run
 # RUN mkdir /home/fuse3d/weights
 # WORKDIR /home/fuse3d/weights
 # RUN wget https://huggingface.co/jyseo/3DFuse_weights/resolve/main/models/3DFuse_sparse_depth_injector.ckpt
@@ -34,6 +34,12 @@ RUN pip install git+https://github.com/arogozhnikov/einops.git
 USER root
 RUN apt-get install ffmpeg libsm6 libxext6  -y
 USER fuser
+
+#https://github.com/NVlabs/tiny-cuda-nn
+ENV CUDA_HOME=/usr/local/cuda-11.8/
+# see "compute capability" in this page and remove deicmal to get architecture var for cuda: https://developer.nvidia.com/cuda-gpus
+ENV TCNN_CUDA_ARCHITECTURES=89
+RUN pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
 
 WORKDIR /home/fuse3d/
 COPY . .
