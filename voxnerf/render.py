@@ -185,12 +185,14 @@ def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0, use_app_net=Fal
     mask = weights > model.ray_march_weight_thres
     smp_pts = pts[mask]
     density_pts = weights[mask]
+    smp_dsts = dists[mask]
+
     print("smp_pts shape: " + str(smp_pts.shape))
     print("weights: " + str(density_pts.shape))
     
     app_feats = model.compute_app_feats(smp_pts)
     if use_app_net:
-        app_feats += model.compute_app_feats_vanilla(smp_pts, density_pts, embed_fr)
+        app_feats += model.compute_app_feats_vanilla(smp_pts, density_pts, smp_dsts, embed_fr)
         
     # viewdirs = rd.view(1, n, 3).expand(k, n, 3)[mask]  # ray dirs for each point
     # additional wild factors here as in nerf-w; wild factors are optimizable

@@ -185,7 +185,8 @@ class VoxRF(nn.Module):
                                                                        "base_resolution": 16,
                                                                        "per_level_scale": per_level_scale},
                                       dtype=torch.float32)
-        self.app_net = VanillaNeRF(input_ch=self.embed_dim, output_ch=4, D=4, W=64, skips=[])
+        self.app_net = VanillaNeRF(input_ch=self.embed_dim, output_ch=16, D=4, W=64, skips=[])
+        self.multires = nn.ModuleList([nn.Linear(17, 17), nn.Linear(17,4)])
 
     @property
     def device(self):
@@ -215,11 +216,14 @@ class VoxRF(nn.Module):
         feats = feats.T
         return feats
 
-    def compute_app_feats_vanilla(self, xyz_sampled, xyz_weights, embed_fr=1.0):
+    def compute_app_feats_vanilla(self, xyz_sampled, xyz_weights, samp_dsts, embed_fr=1.0):
         input = xyz_sampled#torch.cat((xyz_sampled, xyz_weights.unsqueeze(-1)), -1)
         input = (input+self.bound)/(2*self.bound)
         input = self.embed_fn(input)#, embed_fr=embed_fr)
         feats = self.app_net(input)
+        feats = torch.cat((feats, samp_dsts), -1)
+        for layer in self.multires:
+            feats = layer(feats)
         return feats
 
     def compute_bg(self, uv):
