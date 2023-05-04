@@ -16,7 +16,6 @@ def get_K(H, W, FoV_x):
         [0, 0, -1]
     ])
 
-    
     return K
 
 
@@ -157,16 +156,12 @@ class Poser():
         eyes, prompts, horz, elev = train_eye_with_prompts(r=self.R, n=n)
         up = np.array([0, 1, 0])
 
-        
         poses = [
             camera_pose(e, -e, up) for e in eyes
         ]
         poses = np.stack(poses, 0)
-        
 
-        
         FoV = np.random.rand(n) * 30 + 40
-
 
         random_Ks = [
             get_K(self.H, self.W, FoV[i])
