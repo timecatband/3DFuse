@@ -186,9 +186,9 @@ def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0, use_app_net=Fal
     smp_pts = pts[mask]
     density_pts = weights[mask]
     smp_dsts = dists[mask]
-
-    print("smp_pts shape: " + str(smp_pts.shape))
-    print("weights: " + str(density_pts.shape))
+    
+    #print("smp_pts shape: " + str(smp_pts.shape))
+    #print("weights: " + str(density_pts.shape))
     
     app_feats = model.compute_app_feats(smp_pts)
     if use_app_net:

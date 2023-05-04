@@ -92,8 +92,8 @@ class VanillaNeRF(nn.Module):
         self.output_linear = nn.Linear(W, output_ch)
 
     def forward(self, x):
-        print("Model input shape: " + str(x.shape))
-        print("Input channels: " + str(self.input_ch))
+        #print("Model input shape: " + str(x.shape))
+        #print("Input channels: " + str(self.input_ch))
         input_pts = x
         h = input_pts
         for i, l in enumerate(self.pts_linears):
