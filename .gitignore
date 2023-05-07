@@ -2,6 +2,7 @@ results/
 *.mp4
 point_e_model_cache/
 weights/
+huggingface_cache/
 heartbeat.json
 
 # Created by https://www.toptal.com/developers/gitignore/api/python

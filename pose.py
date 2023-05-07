@@ -16,12 +16,11 @@ def get_K(H, W, FoV_x):
         [0, 0, -1]
     ])
 
-    
     return K
 
 
 SIDEVIEW_PROMPTS = [
-    "front view of", "side view of", "backside view of", "side view of"
+    "front view of", "side view of", "backside view of", "side view of", "well lit view of"
 ]
 
 TOPVIEW_PROMPT = "overhead view of"
@@ -40,6 +39,11 @@ def train_eye_with_prompts(r, n):
             _p = TOPVIEW_PROMPT
         else:
             _a = hs[i]
+
+            # _a = (_a + 45) % 360+90 # +90 allows changing _quad to _five
+            # _five = int(_a // 90)
+            # _p = SIDEVIEW_PROMPTS[_five]
+
             _a = (_a + 45) % 360
             _quad = int(_a // 90)
             _p = SIDEVIEW_PROMPTS[_quad]
@@ -157,16 +161,12 @@ class Poser():
         eyes, prompts, horz, elev = train_eye_with_prompts(r=self.R, n=n)
         up = np.array([0, 1, 0])
 
-        
         poses = [
             camera_pose(e, -e, up) for e in eyes
         ]
         poses = np.stack(poses, 0)
-        
 
-        
         FoV = np.random.rand(n) * 30 + 40
-
 
         random_Ks = [
             get_K(self.H, self.W, FoV[i])

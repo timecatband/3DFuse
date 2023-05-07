@@ -177,7 +177,7 @@ class SJC_3DFuse(BaseConf):
         blend_bg_texture=False , bg_texture_hw=4,
         bbox_len=1.0
     )
-    pose:       PoseConfig = PoseConfig(rend_hw=64, FoV=60.0, R=1.5)
+    pose:PoseConfig = PoseConfig(rend_hw=64, FoV=60.0, R=1.5)
 
     emptiness_scale:    int = 10
     emptiness_weight:   int = 1e4
@@ -196,6 +196,7 @@ class SJC_3DFuse(BaseConf):
     bg_preprocess:     bool = True
     num_initial_image:     int = 4
     @validator("vox")
+
     def check_vox(cls, vox_cfg, values):
         family = values['family']
         if family == "sd":
@@ -216,6 +217,7 @@ class SJC_3DFuse(BaseConf):
         image_dir=os.path.join(exp_instance_dir,'initial_image')
 
         # If instance0 initial image exists skip generation
+        print("\nRunning initial semantic model:", semantic_model)
         if not os.path.exists(os.path.join(image_dir,'instance0.png')):        
             if semantic_model == "Karlo":
                 semantic_karlo(initial_prompt,image_dir,cfgs['num_initial_image'],cfgs['bg_preprocess'], seed)
@@ -224,22 +226,26 @@ class SJC_3DFuse(BaseConf):
             else:
                 raise NotImplementedError
         
+        print("\nSetting up semantic coding...")
         # Optimization  and pivotal tuning for LoRA
         semantic_coding(exp_instance_dir,cfgs,self.sd,initial)
         
-        
         # Load SD with Consistency Injection Module
         family = cfgs.pop("family")
+        print("\nSetting up model, family:", family)
         model = getattr(self, family).make()
-        print(model.prompt)
+        print("model prompt:", model.prompt)
+
         cfgs.pop("vox")
+        print("\nSetting up vox")
         vox = self.vox.make()
         
         cfgs.pop("pose")
+        print("\nSetting up poser")
         poser = self.pose.make()
         
         # Get coarse point cloud from off-the-shelf model
-        print("Building point cloud")
+        print("\nBuilding point cloud")
         # Check if point cloud exists
         if not os.path.exists(os.path.join(exp_instance_dir,'points.npz')):
             points = point_e(device=device_glb,exp_dir=exp_instance_dir)
@@ -248,12 +254,12 @@ class SJC_3DFuse(BaseConf):
             print("Saved point cloud")
         else:
             print("Loaded point cloud")
-            points = point_cloud.PointCloud.load(os.path.join(exp_instance_dir,
-                                                              "points.npz"))
+            points = point_cloud.PointCloud.load(os.path.join(exp_instance_dir,"points.npz"))
 
 
         # Score distillation
-        pipeline = NeRF_Fuser(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=True)
+        print("\nRunning NeRF fuser train pipeline")
+        pipeline = NeRF_Fuser(**cfgs, poser=poser, model=model, vox=vox, exp_instance_dir=exp_instance_dir, points=points, is_gradio=True)
         next(pipeline.train())      
 
 
@@ -266,7 +272,7 @@ class NeRF_Fuser:
         lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
         depth_weight, var_red, exp_instance_dir, points, is_gradio, **kwargs
     ):
-        print("Initializing pipeline")
+        print("Initializing NeRF_Fuser pipeline")
         self.poser = poser
         self.vox = vox
         self.model = model
@@ -281,7 +287,6 @@ class NeRF_Fuser:
         self.exp_instance_dir = exp_instance_dir
         self.points = points
         self.is_gradio = is_gradio
-        self.n_steps = 2000
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
@@ -308,8 +313,8 @@ class NeRF_Fuser:
 
     def train(self):
         with tqdm(total=self.n_steps) as pbar, \
-            HeartBeat(pbar) as hbeat, \
-                EventStorage(output_dir=os.path.join(self.exp_instance_dir,'3d')) as metric:
+        HeartBeat(pbar) as hbeat, \
+        EventStorage(output_dir=os.path.join(self.exp_instance_dir,'3d')) as metric:
             self.metric = metric
             self.pbar = pbar
             self.hbeat = hbeat
@@ -324,25 +329,37 @@ class NeRF_Fuser:
                 print("Loaded ckpt for voxnerf")
             else:
                 print("Found no voxnerf ckpt")
+
+
+            total_steps = 0
             print("Starting training poses_ length: ", len(self.poses_))
             for j in range(5):
+                if total_steps > self.n_steps:
+                    print("breaking loops due to nsteps")
+                    break
                 for i in range(len(self.poses_)):
-                    use_guidance = i % 5 != 0
-                    if i < 1000: use_guidance = True
+                    total_steps += 1
+                    if total_steps > self.n_steps:
+                        print("breaking loops due to nsteps")
+                        break
+
+                    #use_guidance = i % 5 != 0
+                    #if i < 1000: use_guidance = True
                     use_guidance = True
                     if (i % 1 == 0):
                         for g in self.opt.param_groups:
                             g['lr'] *= .999998
 
-                    # TODO: Must fix
                     embed_fr = (i+j*len(self.poses_))/(self.n_steps-self.n_steps*0.7)
                                 
                     if use_guidance:
+                        print("Trainning one step with guidance")
                         self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
                                             self.prompt_prefixes_[i], i+j*len(self.poses_), embed_fr)
                     else:
+                        print("Trainning one step without using guidance")
                         self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
-                                                
+
                     self.opt.step()
                     self.opt.zero_grad()
                     if (i%1000 == 0):
@@ -350,11 +367,13 @@ class NeRF_Fuser:
                             "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
                         )
 
+
+
             with EventStorage("result"):
                 evaluate(self.model, self.vox, self.poser)
             
             if self.is_gradio:    
-                yield gr.update(visible=True), f"Generation complete. Please check the video below. \nThe result files and logs are located at {exp_instance_dir}", gr.update(value=os.path.join(exp_instance_dir,'3d/result_10000/video/step_100_.mp4'))
+                yield gr.update(visible=True), f"Generation complete. Please check the video below. \nThe result files and logs are located at {self.exp_instance_dir}", gr.update(value=os.path.join(self.exp_instance_dir,'3d/result_10000/video/step_100_.mp4'))
             else :
                 yield None
         
@@ -362,7 +381,7 @@ class NeRF_Fuser:
 
             hbeat.done()
 
-    def train_one_step_no_guidance(self, pose, angle, k, i, max_angle_variation=0.1):        
+    def train_one_step_no_guidance(self, pose, angle, k, i, max_angle_variation=0.1):
         # Render NeRF from the original pose
         y1, depth1, ws1 = render_one_view(self.vox, self.aabb, self.H, self.W, k, pose, return_w=True)
         y1 = self.model.decode(y1).float()
@@ -408,13 +427,10 @@ class NeRF_Fuser:
         if every(self.pbar, percent=1):
             with torch.no_grad():
                 vis_routine(self.metric, y1, depth1,"",None)
-       
 
         loss.backward()
-
         self.metric.step()
         self.pbar.update()
-
         self.pbar.set_description(str(loss))
         self.hbeat.beat()
 
@@ -425,7 +441,7 @@ class NeRF_Fuser:
                                             self.raster_settings,
                                             device_glb,
                                             self.calibration_value)
-        
+
         render_app_net = False
         if i > 500:
             render_app_net = True
@@ -444,19 +460,19 @@ class NeRF_Fuser:
         with torch.no_grad():
             ts_frac = int((len(self.ts))*embed_fr)
             if ts_frac == 0: ts_frac = 1
+            
             #chosen_σs = np.random.choice(self.ts[(ts_frac-1):ts_frac], self.bs, replace=False)
-            noise_amount = 3.00*(1-(i/self.n_steps))
+            #noise_amount = 2.00*(1-(i/self.n_steps))
+            noise_amount = 3.00 * (1-(i/self.n_steps)) * ((np.sin(i/200)+1)/2)
+            
             chosen_σs = np.random.choice((noise_amount,), self.bs, replace=False)
             chosen_σs = chosen_σs.clip(1.1,12)
-            print("Chosen σ: ", chosen_σs)
+            print("Chosen σ: ", chosen_σs, "noise factor", noise_amount, "i input to noise", i)
+ 
             chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
             chosen_σs = torch.as_tensor(chosen_σs, device=self.model.device, dtype=torch.float32)
-
-
             noise = torch.randn(self.bs, *y.shape[1:], device=self.model.device)
-
             zs = y + chosen_σs * noise
-
             Ds = self.model.denoise(zs, chosen_σs,depth_map.unsqueeze(dim=0),**score_conds)
 
             chosen_σs = chosen_σs.clamp(1,11.91)
@@ -466,11 +482,11 @@ class NeRF_Fuser:
                 grad = (Ds - zs) / chosen_σs
 
             grad = grad.mean(0, keepdim=True)
-            
+
         y.backward(-grad, retain_graph=True)
-      #  tvl = total_variation_loss(y)
-       # tvl = tvl /1000.0
-       # tvl.backward(retain_graph=True)
+        # tvl = total_variation_loss(y)
+        # tvl = tvl /1000.0
+        # tvl.backward(retain_graph=True)
         tvl = total_variation_loss(depth.unsqueeze(0).unsqueeze(0))
         tvl = tvl / 10000.0
         tvl.backward(retain_graph=True)
@@ -490,42 +506,45 @@ class NeRF_Fuser:
             depth_loss = self.depth_weight * depth_loss
             depth_loss.backward(retain_graph=True)
 
-       # lsl = laplacian_sharpness_loss(depth)
-       # lsl = lsl*0.0001
-       # lsl.backward(retain_graph=True)
+            # lsl = laplacian_sharpness_loss(depth)
+            # lsl = lsl*0.0001
+            # lsl.backward(retain_graph=True)
 
-        #emptiness_loss = torch.log(1 + self.emptiness_scale * ws).mean()
-        #emptiness_loss = self.emptiness_weight * emptiness_loss
-        #if self.emptiness_step * self.n_steps <= i:
-        #    emptiness_loss *= self.emptiness_multiplier
-        #emptiness_loss.backward()
+            # emptiness_loss = torch.log(1 + self.emptiness_scale * ws).mean()
+            # emptiness_loss = self.emptiness_weight * emptiness_loss
+            # if self.emptiness_step * self.n_steps <= i:
+            #   emptiness_loss *= self.emptiness_multiplier
+            # emptiness_loss.backward()
 
-       # distance_to_zero = torch.abs(ws - 0)
-       # distance_to_one = torch.abs(ws - 1)
-       # min_distance = torch.min(distance_to_zero, distance_to_one)
-       # alpha_loss = torch.mean(min_distance)
-       # alpha_loss.backward(retain_graph=True)
+            # distance_to_zero = torch.abs(ws - 0)
+            # distance_to_one = torch.abs(ws - 1)
+            # min_distance = torch.min(distance_to_zero, distance_to_one)
+            # alpha_loss = torch.mean(min_distance)
+            # alpha_loss.backward(retain_graph=True)
+
+            # print("Density grad norm: ", self.vox.density.grad.norm())
+            # Print gradient norm of all params in the app_net
+            # for param in self.vox.app_net.parameters():
+            #   print("App net grad norm: ", param.grad.norm())
 
         #print("Density grad norm: ", self.vox.density.grad.norm())
         # Print gradient norm of all params in the app_net
         #for param in self.vox.app_net.parameters():
-         #   print("App net grad norm: ", param.grad.norm())
+        #     print("App net grad norm: ", param.grad.norm())
         if (self.vox.density.grad != None):
             self.vox.density.grad /= 10.0
             if (self.vox.density.grad.norm().item() > 1000):
                 self.vox.density.grad /= 50.0
-    
+
         self.metric.put_scalars(**tsr_stats(y))
 
-      
-        if i % 50 == 0:
+        if i % 100 == 0:
             with torch.no_grad():
                 y = self.model.decode(y)
-                vis_routine(self.metric, y, depth,p,depth_map[0])
-       
+                vis_routine(self.metric, y, depth,p,depth_map[0], noise_factor=(str(noise_amount)[0:5].replace('.','-')))
+
         self.metric.step()
         self.pbar.update()
-
         self.pbar.set_description(p)
         self.hbeat.beat()
 
@@ -548,7 +567,7 @@ def evaluate(score_model, vox, poser):
         if fuse.on_break():
             break
         pose = poses[i]
-        y, depth = render_one_view(vox, aabb, H, W, K, pose)
+        y, depth = render_one_view(vox, aabb, H, W, K, pose, use_app_net=True)
         y = score_model.decode(y)
         vis_routine(metric, y, depth,"",None)
 
@@ -592,15 +611,15 @@ def scene_box_filter_(ro, rd, aabb):
     return ro, rd, t_min, t_max
 
 
-def vis_routine(metric, y, depth,prompt,depth_map):
+def vis_routine(metric, y, depth, prompt, depth_map, noise_factor=''):
     pane = nerf_vis(y, depth, final_H=256)
     im = torch_samps_to_imgs(y)[0]
     
     depth = depth.cpu().numpy()
-    metric.put_artifact("view", ".png","",lambda fn: imwrite(fn, pane))
-    metric.put_artifact("img", ".png",prompt, lambda fn: imwrite(fn, im))
+    metric.put_artifact("view", ".png", f"noise_{noise_factor}_",lambda fn: imwrite(fn, pane))
+    metric.put_artifact("img", ".png",prompt[0:20], lambda fn: imwrite(fn, im))
     if depth_map != None:
-        metric.put_artifact("PC_depth", ".png",prompt, lambda fn: imwrite(fn, depth_map.cpu().squeeze()))
+        metric.put_artifact("PC_depth", ".png",prompt[0:20], lambda fn: imwrite(fn, depth_map.cpu().squeeze()))
     metric.put_artifact("depth", ".npy","",lambda fn: np.save(fn, depth))
 
 

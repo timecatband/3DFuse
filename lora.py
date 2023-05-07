@@ -17,7 +17,7 @@ def train_lora(args):
     modelfile = os.path.join(weight_dir, "final_lora.safetensors")
     if os.path.exists(modelfile):
         # If the model exists, we don't need to train it again
-        print("Model exists, skipping training")
+        print("LoRA: Model exists, skipping training")
         return
 
     # Load the weights if they already exist
