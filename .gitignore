@@ -3,6 +3,7 @@ results/
 point_e_model_cache/
 weights/
 huggingface_cache/
+zero123/configs/105000.ckpt
 heartbeat.json
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
