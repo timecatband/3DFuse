@@ -185,7 +185,24 @@ class VoxRF(nn.Module):
                                                                        "base_resolution": 16,
                                                                        "per_level_scale": per_level_scale},
                                       dtype=torch.float32)
-        self.app_net = VanillaNeRF(input_ch=self.embed_dim, output_ch=16, D=4, W=64, skips=[])
+        self.encoder_dir = tcnn.Encoding(
+            n_input_dims=3,
+            encoding_config={
+                "otype": "SphericalHarmonics",
+                "degree": 4,
+            },
+        )
+
+        self.app_net = VanillaNeRF(input_ch=self.embed_dim+self.encoder_dir.n_output_dims, output_ch=16, D=4, W=64, skips=[])
+        #self.app_net = tcnn.Network(n_input_dims=self.embed_dim+self.encoder_dir.n_output_dims,
+        #                            n_output_dims = 16,
+        #                            network_config={
+        #                                "otype": "FullyFusedMLP",
+        #                                "activation": "ReLU",
+        #                                "output_activation": "ReLU",
+        #                                "n_neurons": 64,
+        #                                "n_hidden_layers": 4
+        #                            })
         self.multires = nn.ModuleList([nn.Linear(17, 17), nn.Linear(17,4)])
 
     @property
@@ -216,10 +233,12 @@ class VoxRF(nn.Module):
         feats = feats.T
         return feats
 
-    def compute_app_feats_vanilla(self, xyz_sampled, xyz_weights, samp_dsts, embed_fr=1.0):
+    def compute_app_feats_vanilla(self, xyz_sampled, xyz_weights, samp_dsts, samp_dirs, embed_fr=1.0):
         input = xyz_sampled#torch.cat((xyz_sampled, xyz_weights.unsqueeze(-1)), -1)
         input = (input+self.bound)/(2*self.bound)
         input = self.embed_fn(input)#, embed_fr=embed_fr)
+        samp_dirs = self.encoder_dir(samp_dirs)
+        input = torch.cat((input, samp_dirs), -1)
         feats = self.app_net(input)
         feats = torch.cat((feats, samp_dsts), -1)
         for layer in self.multires:
@@ -328,6 +347,8 @@ class V_SJC(VoxRF):
                 pass
             if "app_net" in name:
                 print("Initializing learning rate for app_net to 5e-4")
+                grp["lr"] = 5e-3
+            if "encoder_dir" in name:
                 grp["lr"] = 5e-3
             if "embed_fn" in name:
                 print("Initializing embedding parameters")

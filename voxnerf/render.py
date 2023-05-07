@@ -189,10 +189,14 @@ def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0, use_app_net=Fal
 
     print("smp_pts shape: " + str(smp_pts.shape))
     print("weights: " + str(density_pts.shape))
+    smp_dirs = ro[0]-smp_pts
+    smp_dirs = smp_dirs / (torch.norm(smp_dirs, dim=-1, keepdim=True)+0.0001)
     
     app_feats = model.compute_app_feats(smp_pts)
     if use_app_net:
-        app_feats += model.compute_app_feats_vanilla(smp_pts, density_pts, smp_dsts, embed_fr)
+        app_feats += model.compute_app_feats_vanilla(smp_pts, density_pts, smp_dsts, 
+                                                     smp_dirs,
+                                                     embed_fr)
         
     # viewdirs = rd.view(1, n, 3).expand(k, n, 3)[mask]  # ray dirs for each point
     # additional wild factors here as in nerf-w; wild factors are optimizable
