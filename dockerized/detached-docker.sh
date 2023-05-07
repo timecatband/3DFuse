@@ -5,6 +5,6 @@
 docker run --rm --gpus all --name fuse3d \
 -v "$(pwd)/:/home/fuse3d/" \
 -v "$(pwd)/huggingface_cache/huggingface/:/home/fuser/.cache/huggingface/" \
--it --entrypoint="/bin/bash" \
+-d --entrypoint="/bin/bash" \
 fuse3d-cuda11-8 \
-#"/home/fuse3d/dockerized/fuse-prompt.sh"
+"/home/fuse3d/dockerized/fuse-prompt.sh"

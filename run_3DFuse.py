@@ -463,7 +463,7 @@ class NeRF_Fuser:
             
             #chosen_σs = np.random.choice(self.ts[(ts_frac-1):ts_frac], self.bs, replace=False)
             #noise_amount = 2.00*(1-(i/self.n_steps))
-            noise_amount = 3.00*((np.sin(i/100)+1)/2)
+            noise_amount = 3.00 * (1-(i/self.n_steps)) * ((np.sin(i/200)+1)/2)
             
             chosen_σs = np.random.choice((noise_amount,), self.bs, replace=False)
             chosen_σs = chosen_σs.clip(1.1,12)
@@ -538,10 +538,10 @@ class NeRF_Fuser:
 
         self.metric.put_scalars(**tsr_stats(y))
 
-        if i % 50 == 0:
+        if i % 100 == 0:
             with torch.no_grad():
                 y = self.model.decode(y)
-                vis_routine(self.metric, y, depth,p,depth_map[0])
+                vis_routine(self.metric, y, depth,p,depth_map[0], noise_factor=(str(noise_amount)[0:5].replace('.','-')))
 
         self.metric.step()
         self.pbar.update()
@@ -567,7 +567,7 @@ def evaluate(score_model, vox, poser):
         if fuse.on_break():
             break
         pose = poses[i]
-        y, depth = render_one_view(vox, aabb, H, W, K, pose)
+        y, depth = render_one_view(vox, aabb, H, W, K, pose, use_app_net=True)
         y = score_model.decode(y)
         vis_routine(metric, y, depth,"",None)
 
@@ -611,15 +611,15 @@ def scene_box_filter_(ro, rd, aabb):
     return ro, rd, t_min, t_max
 
 
-def vis_routine(metric, y, depth,prompt,depth_map):
+def vis_routine(metric, y, depth, prompt, depth_map, noise_factor=''):
     pane = nerf_vis(y, depth, final_H=256)
     im = torch_samps_to_imgs(y)[0]
     
     depth = depth.cpu().numpy()
-    metric.put_artifact("view", ".png","",lambda fn: imwrite(fn, pane))
-    metric.put_artifact("img", ".png",prompt, lambda fn: imwrite(fn, im))
+    metric.put_artifact("view", ".png", f"noise_{noise_factor}_",lambda fn: imwrite(fn, pane))
+    metric.put_artifact("img", ".png",prompt[0:20], lambda fn: imwrite(fn, im))
     if depth_map != None:
-        metric.put_artifact("PC_depth", ".png",prompt, lambda fn: imwrite(fn, depth_map.cpu().squeeze()))
+        metric.put_artifact("PC_depth", ".png",prompt[0:20], lambda fn: imwrite(fn, depth_map.cpu().squeeze()))
     metric.put_artifact("depth", ".npy","",lambda fn: np.save(fn, depth))
 
 
