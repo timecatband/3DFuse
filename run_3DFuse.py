@@ -160,6 +160,17 @@ def reproject_to_another_pose(image, depth, pose1, pose2, H, W, intrinsics):
 
     return reprojected_image
 
+def replace_color(image, old_color, new_color):
+    width, height = image.size
+    pixels = image.load()
+
+    for x in range(width):
+        for y in range(height):
+            if pixels[x, y] == old_color:
+                pixels[x, y] = new_color
+
+    return image
+
 
 class SJC_3DFuse(BaseConf):
     family:     str = "sd"
@@ -256,6 +267,10 @@ class SJC_3DFuse(BaseConf):
             initial_images.append(Image.open(os.path.join(image_dir,'instance{}.png'.format(i))))
         initial_latents = []
         for image in initial_images:
+            # Replace pure white with pure green in image
+            image = image.convert("RGB")
+            image = replace_color(image, (255, 255, 255), (0, 255, 0))
+            
             # PIL image to torch tensor
             image = torch.tensor(np.array(image)).permute(2, 0, 1).unsqueeze(0).float() / 255.0
             image = image.to("cuda")
@@ -321,28 +336,22 @@ class NeRF_Fuser:
         self.calibration_value = 0.0
 
     def initial_overfit(self):
-        poses = pose.circular_poses(0.7,0,1)
-        for i, render_pose in enumerate(poses):
-            expected_latents = self.initial_latents[i]
-            for i in range(500):
+        poses = pose.circular_poses(1.0,0,len(self.initial_latents))
+        for i in range(50):
+            for j, render_pose in enumerate(poses):
+                expected_latents = self.initial_latents[j]
                 y1, depth1, ws1, _ = render_one_view(self.vox, self.aabb, self.H, self.W, pose.get_K(64,64,60), render_pose, return_w=True, use_app_net=True)
                 # Compute mse loss between ys and expected_latents
                 loss = torch.nn.functional.mse_loss(y1, expected_latents)
                 loss.backward()
                 self.opt.step()
                 self.opt.zero_grad()
-                if i == 499:
-                    rgbs = self.model.decode(y1)
-                    # Convert to PIL image and save
-                    rgbs = rgbs[0].cpu().numpy().transpose(1,2,0)
-                    rgbs = (rgbs * 255).astype(np.uint8)
-                    rgbs = Image.fromarray(rgbs)
-                    rgbs.save(os.path.join(self.exp_instance_dir,"initial_overfit.png"))
-
-        
-
-
-
+        rgbs = self.model.decode(y1)
+        # Convert to PIL image and save
+        rgbs = rgbs[0].cpu().numpy().transpose(1,2,0)
+        rgbs = (rgbs * 255).astype(np.uint8)
+        rgbs = Image.fromarray(rgbs)
+        rgbs.save(os.path.join(self.exp_instance_dir,"initial_overfit.png"))
 
     def train(self):
         with tqdm(total=self.n_steps) as pbar, \
@@ -363,7 +372,7 @@ class NeRF_Fuser:
             else:
                 print("Found no voxnerf ckpt")
             print("Starting training poses_ length: ", len(self.poses_))
-            self.initial_overfit()
+           # self.initial_overfit()
             for j in range(5):
                 for i in range(len(self.poses_)):
                     use_guidance = i % 5 != 0
