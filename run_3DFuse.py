@@ -234,6 +234,23 @@ class SJC_3DFuse(BaseConf):
                 semantic_sd(initial_prompt,image_dir,cfgs['num_initial_image'],cfgs['bg_preprocess'], seed)
             else:
                 raise NotImplementedError
+
+        initial_images = []
+        initial_depth_images = []
+        for i in range(self.num_initial_image):
+            initial_images.append(Image.open(os.path.join(image_dir,'instance{}.png'.format(i))))
+            # Check if depth image exists
+            if not os.path.exists(os.path.join(image_dir,'instance{}_depth.png'.format(i))):
+                continue
+            image =Image.open(os.path.join(image_dir,'instance{}_depth.png'.format(i)))
+            image = torch.tensor(np.array(image)).squeeze(0).float() / 255.0
+            print("Initial depth shape", image.shape)
+            image = torch.nn.functional.interpolate(image.unsqueeze(0).unsqueeze(0), size=(64,64), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+            image = image
+            image = image.to("cuda")
+            initial_depth_images.append(image)
+            
+
         
         # Optimization  and pivotal tuning for LoRA
         semantic_coding(exp_instance_dir,cfgs,self.sd,initial)
@@ -262,9 +279,6 @@ class SJC_3DFuse(BaseConf):
             points = point_cloud.PointCloud.load(os.path.join(exp_instance_dir,
                                                               "points.npz"))
             
-        initial_images = []
-        for i in range(self.num_initial_image):
-            initial_images.append(Image.open(os.path.join(image_dir,'instance{}.png'.format(i))))
         initial_latents = []
         for image in initial_images:
             # Replace pure white with pure green in image
@@ -279,7 +293,8 @@ class SJC_3DFuse(BaseConf):
             initial_latents.append(model.encode(image))
 
         # Score distillation
-        pipeline = NeRF_Fuser(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=True, initial_latents=initial_latents)
+        pipeline = NeRF_Fuser(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=True, initial_latents=initial_latents,
+                              initial_depth_images=initial_depth_images)
         next(pipeline.train())      
 
 
@@ -290,7 +305,7 @@ class NeRF_Fuser:
     def __init__(
         self, poser, vox, model,
         lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
-        depth_weight, var_red, exp_instance_dir, points, is_gradio, 
+        depth_weight, var_red, exp_instance_dir, points, is_gradio, initial_depth_images,
         initial_latents, **kwargs
     ):
         print("Initializing pipeline")
@@ -311,6 +326,7 @@ class NeRF_Fuser:
         self.n_steps = 2000
 
         self.initial_latents = initial_latents
+        self.initial_depth_images = initial_depth_images
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
@@ -336,16 +352,21 @@ class NeRF_Fuser:
         self.calibration_value = 0.0
 
     def initial_overfit(self):
-        poses = pose.circular_poses(1.0,0,len(self.initial_latents))
+        poses = pose.circular_poses(1.5,0,len(self.initial_latents))
         for i in range(50):
             for j, render_pose in enumerate(poses):
                 expected_latents = self.initial_latents[j]
                 y1, depth1, ws1, _ = render_one_view(self.vox, self.aabb, self.H, self.W, pose.get_K(64,64,60), render_pose, return_w=True, use_app_net=True)
                 # Compute mse loss between ys and expected_latents
                 loss = torch.nn.functional.mse_loss(y1, expected_latents)
+                loss += torch.nn.functional.mse_loss(depth1, self.initial_depth_images[j])
                 loss.backward()
                 self.opt.step()
                 self.opt.zero_grad()
+                # Print depth 1 shape min max
+                print("Depth 1 shape min max", depth1.shape, depth1.min(), depth1.max())
+                # Print initial depth shape min max
+                print("Initial depth shape min max", self.initial_depth_images[j].shape, self.initial_depth_images[j].min(), self.initial_depth_images[j].max())
         rgbs = self.model.decode(y1)
         # Convert to PIL image and save
         rgbs = rgbs[0].cpu().numpy().transpose(1,2,0)
@@ -372,7 +393,7 @@ class NeRF_Fuser:
             else:
                 print("Found no voxnerf ckpt")
             print("Starting training poses_ length: ", len(self.poses_))
-           # self.initial_overfit()
+            self.initial_overfit()
             for j in range(5):
                 for i in range(len(self.poses_)):
                     use_guidance = i % 5 != 0
@@ -475,8 +496,8 @@ class NeRF_Fuser:
                                             self.calibration_value)
         
         render_app_net = True
-        #if i > 500:
-        #    render_app_net = True
+        if i > 500:
+            render_app_net = True
         #if i > 500 and i < 1000:
         #    self.vox.color.requires_grad = False
             #self.vox.density.requires_grad = False
