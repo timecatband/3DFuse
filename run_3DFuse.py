@@ -6,7 +6,7 @@ from imageio import imwrite
 from pydantic import validator
 import imageio
 import gradio as gr
-
+import pose
 from PIL import Image
 
 from my.utils import (
@@ -250,10 +250,21 @@ class SJC_3DFuse(BaseConf):
             print("Loaded point cloud")
             points = point_cloud.PointCloud.load(os.path.join(exp_instance_dir,
                                                               "points.npz"))
-
+            
+        initial_images = []
+        for i in range(self.num_initial_image):
+            initial_images.append(Image.open(os.path.join(image_dir,'instance{}.png'.format(i))))
+        initial_latents = []
+        for image in initial_images:
+            # PIL image to torch tensor
+            image = torch.tensor(np.array(image)).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+            image = image.to("cuda")
+            # Resize image to 512x512
+            image = torch.nn.functional.interpolate(image, (512, 512), mode="area")
+            initial_latents.append(model.encode(image))
 
         # Score distillation
-        pipeline = NeRF_Fuser(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=True)
+        pipeline = NeRF_Fuser(**cfgs, poser=poser,model=model,vox=vox,exp_instance_dir=exp_instance_dir, points=points, is_gradio=True, initial_latents=initial_latents)
         next(pipeline.train())      
 
 
@@ -264,7 +275,8 @@ class NeRF_Fuser:
     def __init__(
         self, poser, vox, model,
         lr, n_steps, emptiness_scale, emptiness_weight, emptiness_step, emptiness_multiplier,
-        depth_weight, var_red, exp_instance_dir, points, is_gradio, **kwargs
+        depth_weight, var_red, exp_instance_dir, points, is_gradio, 
+        initial_latents, **kwargs
     ):
         print("Initializing pipeline")
         self.poser = poser
@@ -282,6 +294,8 @@ class NeRF_Fuser:
         self.points = points
         self.is_gradio = is_gradio
         self.n_steps = 2000
+
+        self.initial_latents = initial_latents
 
         assert model.samps_centered()
         _, self.target_H, self.target_W = model.data_shape()
@@ -306,6 +320,30 @@ class NeRF_Fuser:
         self.ts = model.us[30:-10]
         self.calibration_value = 0.0
 
+    def initial_overfit(self):
+        poses = pose.circular_poses(0.7,0,1)
+        for i, render_pose in enumerate(poses):
+            expected_latents = self.initial_latents[i]
+            for i in range(500):
+                y1, depth1, ws1, _ = render_one_view(self.vox, self.aabb, self.H, self.W, pose.get_K(64,64,60), render_pose, return_w=True, use_app_net=True)
+                # Compute mse loss between ys and expected_latents
+                loss = torch.nn.functional.mse_loss(y1, expected_latents)
+                loss.backward()
+                self.opt.step()
+                self.opt.zero_grad()
+                if i == 499:
+                    rgbs = self.model.decode(y1)
+                    # Convert to PIL image and save
+                    rgbs = rgbs[0].cpu().numpy().transpose(1,2,0)
+                    rgbs = (rgbs * 255).astype(np.uint8)
+                    rgbs = Image.fromarray(rgbs)
+                    rgbs.save(os.path.join(self.exp_instance_dir,"initial_overfit.png"))
+
+        
+
+
+
+
     def train(self):
         with tqdm(total=self.n_steps) as pbar, \
             HeartBeat(pbar) as hbeat, \
@@ -325,6 +363,7 @@ class NeRF_Fuser:
             else:
                 print("Found no voxnerf ckpt")
             print("Starting training poses_ length: ", len(self.poses_))
+            self.initial_overfit()
             for j in range(5):
                 for i in range(len(self.poses_)):
                     use_guidance = i % 5 != 0
@@ -426,14 +465,14 @@ class NeRF_Fuser:
                                             device_glb,
                                             self.calibration_value)
         
-        render_app_net = False
-        if i > 500:
-            render_app_net = True
-        if i > 500 and i < 1000:
-            self.vox.color.requires_grad = False
+        render_app_net = True
+        #if i > 500:
+        #    render_app_net = True
+        #if i > 500 and i < 1000:
+        #    self.vox.color.requires_grad = False
             #self.vox.density.requires_grad = False
-        else:
-            self.vox.color.requires_grad = True
+        #else:
+        #    self.vox.color.requires_grad = True
             #self.vox.density.requires_grad = True
         y, depth, ws, weight_entropy = render_one_view(self.vox, self.aabb, self.H, self.W, k,
                                        pose, return_w=True, embed_fr = embed_fr, use_app_net = render_app_net)
