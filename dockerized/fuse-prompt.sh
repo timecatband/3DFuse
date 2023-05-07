@@ -9,4 +9,6 @@
 #./run.sh "A large steampunk propeller airplane, powered by steam engines, with an open deck on top, made mostly of wood with some steel and brass fairings" "steampunk"
 #./run.sh "A steampunk tavern with brass boilers and brick walls, like a western saloon" "tavern"
 #./run.sh "A steampunk tavern, like a bar or pub, or a western saloon, from a fantasy town where everything is steampunk and made of wood and brass" "tavern"
-./run.sh "A steampunk bank tower, with a fortress like vault, in a fantasy steampunk city" "tower"
+#./run.sh "A steampunk bank tower, with a fortress like vault, in a fantasy steampunk city" "tower"
+./run.sh "A large steampunk flying airship, aircraft carrier, zeppelin, blimp, airplane, flying fortress, steampunk pirates aircraft, full view, zoomed out, high res" "aircraft"
+#c1ac4244fc9f3edbbd4ad48774f2e9fef5b382e8c0c068e8fe49279ceee1fccb  ./point_e_model_cache/ViT-L-14.pt

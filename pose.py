@@ -40,13 +40,13 @@ def train_eye_with_prompts(r, n):
         else:
             _a = hs[i]
 
-            # _a = (_a + 45) % 360+90 # +90 allows changing _quad to _five
-            # _five = int(_a // 90)
-            # _p = SIDEVIEW_PROMPTS[_five]
+            _a = (_a + 45) % 360+90 # +90 allows changing _quad to _five
+            _five = int(_a // 90)
+            _p = SIDEVIEW_PROMPTS[_five]
 
-            _a = (_a + 45) % 360
-            _quad = int(_a // 90)
-            _p = SIDEVIEW_PROMPTS[_quad]
+            # _a = (_a + 45) % 360
+            # _quad = int(_a // 90)
+            # _p = SIDEVIEW_PROMPTS[_quad]
         prompts.append(_p)
 
     θ = np.deg2rad(hs)

@@ -160,6 +160,7 @@ class VoxRF(nn.Module):
         self.density = torch.nn.Parameter(
             torch.zeros((1, 1, *zyx))
         )
+
         self.color = torch.nn.Parameter(
             torch.randn((1, c, *zyx))
         )
@@ -223,7 +224,6 @@ class VoxRF(nn.Module):
         σ = σ * torch.exp(self.d_scale)
         σ = F.softplus(σ + self.density_shift)
         return σ
-    
 
     def compute_app_feats(self, xyz_sampled):
         xyz_sampled = to_grid_samp_coords(xyz_sampled, self.aabb)
@@ -335,7 +335,7 @@ class V_SJC(VoxRF):
         # rendering color in [-1, 1] range, since score models all operate on centered img
         self.feats2color = lambda feats: torch.sigmoid(feats) * 2 - 1
 
-    def opt_params(self):
+    def opt_params(self, override_lr=5e-3):
         groups = []
         for name, param in self.named_parameters():
             # print(f"{name} {param.shape}")
@@ -346,10 +346,12 @@ class V_SJC(VoxRF):
                 # grp["lr"] = 0.
                 pass
             if "app_net" in name:
-                print("Initializing learning rate for app_net to 5e-4")
-                grp["lr"] = 5e-3
+                #grp["lr"] = 5e-3
+                grp["lr"] = override_lr
+                print("Initializing learning rate for app_net to", grp["lr"])
             if "encoder_dir" in name:
-                grp["lr"] = 5e-3
+                grp["lr"] = override_lr
+                print("Initializing learning rate for encoder_dir to", grp["lr"])
             if "embed_fn" in name:
                 print("Initializing embedding parameters")
                 grp["lr"] = 5e-2

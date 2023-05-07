@@ -1,3 +1,9 @@
+You'll want to download some relevent model weights on the host, put them in the weights folder in 3DFuse root
+`wget https://huggingface.co/jyseo/3DFuse_weights/resolve/main/models/3DFuse_sparse_depth_injector.ckpt`
+
+and this one in the folder zero123/configs
+`wget https://huggingface.co/cvlab/zero123-weights/resolve/main/105000.ckpt`
+
 To run GPU in container, you need:
 1. nvidia and cuda drivers on host
 2. nvidia-container-toolkit package 
@@ -8,7 +14,6 @@ Should give output including line similar to this with cuda version:
 +-----------------------------------------------------------------------------+
 | NVIDIA-SMI 525.105.17   Driver Version: 525.105.17   CUDA Version: 12.0     |
 |-------------------------------+----------------------+----------------------+
-
 
 Then to install the container toolkit, follow instructions here: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker
 

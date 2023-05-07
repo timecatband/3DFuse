@@ -180,7 +180,11 @@ def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0, use_app_net=Fal
         smp_pts = pts[mask]
 
     σ = torch.zeros(k, n, device=ro.device)
+    # print("sigma thing σ", σ)
+    # print("smp_pts", smp_pts)
     σ[mask] = smp_pts_density = model.compute_density_feats(smp_pts)
+    # print("sigma thing σ masked", σ)
+
     weights = volume_rend_weights(σ, step_size)
     mask = weights > model.ray_march_weight_thres
     smp_pts = pts[mask]
@@ -240,6 +244,11 @@ def spherical_xyz_to_uv(xyz):
 def volume_rend_weights(σ, dist):
     α = 1 - torch.exp(-σ * dist)
     T = torch.ones_like(α)
+
+    # print("\nvolume_rend_weights")
+    # print("σ, dist", σ, dist)
+    # print("\T", T)
+
     T[1:] = (1 - α).cumprod(dim=0)[:-1]
     assert (T >= 0).all()
     weights = α * T

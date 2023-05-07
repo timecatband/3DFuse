@@ -1,4 +1,4 @@
-import os
+import os, json
 import numpy as np
 import torch
 from einops import rearrange
@@ -181,7 +181,7 @@ class SJC_3DFuse(BaseConf):
         dir="./results",
         alpha=0.3
     )
-    lr:         float = 0.05
+    lr:         float = 0.05 #5e-2
     n_steps:    int = 2000
     vox:        VoxConfig = VoxConfig(
         model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
@@ -244,7 +244,10 @@ class SJC_3DFuse(BaseConf):
         # Load SD with Consistency Injection Module
         family = cfgs.pop("family")
         print("\nSetting up model, family:", family)
+
+        #if not os.path.exists(os.path.join(image_dir,'../lora/final_lora.safetensors')):
         model = getattr(self, family).make()
+
         print("model prompt:", model.prompt)
 
         cfgs.pop("vox")
@@ -323,7 +326,7 @@ class NeRF_Fuser:
         self.bs = 1
         self.aabb = vox.aabb.T.cpu().numpy()
         self.vox = vox.to(device_glb)
-        self.opt = torch.optim.Adamax(vox.opt_params(), lr=lr)
+        self.opt = torch.optim.Adamax(vox.opt_params(override_lr=self.lr), lr=lr)
 
         self.H, self.W = poser.H, poser.W
         self.Ks_, self.poses_, self.prompt_prefixes_, self.angles_list = poser.sample_train(n_steps, device_glb)
@@ -367,7 +370,7 @@ class NeRF_Fuser:
             self.pbar = pbar
             self.hbeat = hbeat
             self.opt.zero_grad()
-            
+
             # List files in instance_dir/3d/ckpt
             ckpt_list = glob.glob(os.path.join(self.exp_instance_dir,'3d','ckpt','*'))
             # If ckpt exists, load it
@@ -400,7 +403,7 @@ class NeRF_Fuser:
                             g['lr'] *= .999998
 
                     embed_fr = (i+j*len(self.poses_))/(self.n_steps-self.n_steps*0.7)
-                                
+
                     if use_guidance:
                         print("Trainning one step with guidance")
                         self.train_one_step(self.poses_[i], self.angles_list[i], self.Ks_[i],
@@ -411,21 +414,23 @@ class NeRF_Fuser:
 
                     self.opt.step()
                     self.opt.zero_grad()
+
+                    #print("self.opt", json.dumps(self.opt, indent=2, default=str))
+                    #print('self.opt.state_dict()', self.opt.state_dict())
+
                     if (i%1000 == 0):
                         metric.put_artifact(
                             "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
                         )
 
-
-
             with EventStorage("result"):
                 evaluate(self.model, self.vox, self.poser)
-            
+
             if self.is_gradio:    
                 yield gr.update(visible=True), f"Generation complete. Please check the video below. \nThe result files and logs are located at {self.exp_instance_dir}", gr.update(value=os.path.join(self.exp_instance_dir,'3d/result_10000/video/step_100_.mp4'))
             else :
                 yield None
-        
+
             metric.step()
 
             hbeat.done()
@@ -512,11 +517,11 @@ class NeRF_Fuser:
             
             #chosen_σs = np.random.choice(self.ts[(ts_frac-1):ts_frac], self.bs, replace=False)
             #noise_amount = 2.00*(1-(i/self.n_steps))
-            noise_amount = 3.00 * (1-(i/self.n_steps)) * ((np.sin(i/200)+1)/2)
-            
+            noise_amount = 1.20 * (1-(i/self.n_steps)) * ((np.sin((i-500)/400)+1)/2)
+
             chosen_σs = np.random.choice((noise_amount,), self.bs, replace=False)
             chosen_σs = chosen_σs.clip(1.1,12)
-            print("Chosen σ: ", chosen_σs, "noise factor", noise_amount, "i input to noise", i)
+            print("Chosen σ: ", chosen_σs, "noise factor", noise_amount, "learning rate", self.lr, "iteration", i)
  
             chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
             chosen_σs = torch.as_tensor(chosen_σs, device=self.model.device, dtype=torch.float32)
@@ -640,6 +645,17 @@ def render_one_view(vox, aabb, H, W, K, pose, return_w=False, embed_fr = 1.0, us
 
     assert len(ro) == N, "for now all pixels must be in"
     ro, rd, t_min, t_max = as_torch_tsrs(vox.device, ro, rd, t_min, t_max)
+
+    # print("\ntrying render_ray_bundle", json.dumps({
+    #     "vox": vox, 
+    #     "ro": ro, 
+    #     "rd": rd, 
+    #     "t_min": t_min, 
+    #     "t_max": t_max, 
+    #     "embed_fr": embed_fr, 
+    #     "use_app_net": use_app_net,
+    # },indent=2,default=str))
+
     rgbs, depth, weights = render_ray_bundle(vox, ro, rd, t_min, t_max, embed_fr, use_app_net)
 
     rgbs = rearrange(rgbs, "(h w) c -> 1 c h w", h=H, w=W)
