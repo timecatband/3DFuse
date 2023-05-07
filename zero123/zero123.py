@@ -68,7 +68,6 @@ def sample_model(input_im, model, sampler, precision, h, w, ddim_steps, n_sample
                  ddim_eta, x, y, z):
     precision_scope = autocast if precision == 'autocast' else nullcontext
     with precision_scope('cuda'):
-        with model.ema_scope():
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
             T = torch.tensor([math.radians(x), math.sin(
                 math.radians(y)), math.cos(math.radians(y)), z])
@@ -177,73 +176,7 @@ def main_run(models, device,
 
     description = None
 
-    return output_ims
-
-
-def calc_cam_cone_pts_3d(polar_deg, azimuth_deg, radius_m, fov_deg):
-    '''
-    :param polar_deg (float).
-    :param azimuth_deg (float).
-    :param radius_m (float).
-    :param fov_deg (float).
-    :return (5, 3) array of float with (x, y, z).
-    '''
-    polar_rad = np.deg2rad(polar_deg)
-    azimuth_rad = np.deg2rad(azimuth_deg)
-    fov_rad = np.deg2rad(fov_deg)
-    polar_rad = -polar_rad  # NOTE: Inverse of how used_x relates to x.
-
-    # Camera pose center:
-    cam_x = radius_m * np.cos(azimuth_rad) * np.cos(polar_rad)
-    cam_y = radius_m * np.sin(azimuth_rad) * np.cos(polar_rad)
-    cam_z = radius_m * np.sin(polar_rad)
-
-    # Obtain four corners of camera frustum, assuming it is looking at origin.
-    # First, obtain camera extrinsics (rotation matrix only):
-    camera_R = np.array([[np.cos(azimuth_rad) * np.cos(polar_rad),
-                          -np.sin(azimuth_rad),
-                          -np.cos(azimuth_rad) * np.sin(polar_rad)],
-                         [np.sin(azimuth_rad) * np.cos(polar_rad),
-                          np.cos(azimuth_rad),
-                          -np.sin(azimuth_rad) * np.sin(polar_rad)],
-                         [np.sin(polar_rad),
-                          0.0,
-                          np.cos(polar_rad)]])
-    # print('camera_R:', lo(camera_R).v)
-
-    # Multiply by corners in camera space to obtain go to space:
-    corn1 = [-1.0, np.tan(fov_rad / 2.0), np.tan(fov_rad / 2.0)]
-    corn2 = [-1.0, -np.tan(fov_rad / 2.0), np.tan(fov_rad / 2.0)]
-    corn3 = [-1.0, -np.tan(fov_rad / 2.0), -np.tan(fov_rad / 2.0)]
-    corn4 = [-1.0, np.tan(fov_rad / 2.0), -np.tan(fov_rad / 2.0)]
-    corn1 = np.dot(camera_R, corn1)
-    corn2 = np.dot(camera_R, corn2)
-    corn3 = np.dot(camera_R, corn3)
-    corn4 = np.dot(camera_R, corn4)
-
-    # Now attach as offset to actual 3D camera position:
-    corn1 = np.array(corn1) / np.linalg.norm(corn1, ord=2)
-    corn_x1 = cam_x + corn1[0]
-    corn_y1 = cam_y + corn1[1]
-    corn_z1 = cam_z + corn1[2]
-    corn2 = np.array(corn2) / np.linalg.norm(corn2, ord=2)
-    corn_x2 = cam_x + corn2[0]
-    corn_y2 = cam_y + corn2[1]
-    corn_z2 = cam_z + corn2[2]
-    corn3 = np.array(corn3) / np.linalg.norm(corn3, ord=2)
-    corn_x3 = cam_x + corn3[0]
-    corn_y3 = cam_y + corn3[1]
-    corn_z3 = cam_z + corn3[2]
-    corn4 = np.array(corn4) / np.linalg.norm(corn4, ord=2)
-    corn_x4 = cam_x + corn4[0]
-    corn_y4 = cam_y + corn4[1]
-    corn_z4 = cam_z + corn4[2]
-
-    xs = [cam_x, corn_x1, corn_x2, corn_x3, corn_x4]
-    ys = [cam_y, corn_y1, corn_y2, corn_y3, corn_y4]
-    zs = [cam_z, corn_z1, corn_z2, corn_z3, corn_z4]
-
-    return np.array([xs, ys, zs]).T
+    return output_ims, (x,y,z)
 
 
 # Instantiate all models beforehand for efficiency.
@@ -256,10 +189,10 @@ print('Instantiating LatentDiffusion...')
 models['turncam'] = load_model_from_config(config, ckpt, device=device)
 
 def run(input_image, x = 20):
-    output_imgs = main_run(models, device, 0, x, 0, input_image)
+    output_imgs, xyz = main_run(models, device, 0, x, 0, input_image)
     for i, output_img in enumerate(output_imgs):
         output_img.save(f'output_{i}.png')
-    return output_imgs
+    return output_imgs, xyz
 
 
 def process_image(input_image):
@@ -280,20 +213,29 @@ def load_image(filename):
     input_image = Image.open(sys.argv[1])
     return process_image(input_image)
 
-def do_iter(image, i):
-    output_imgs = run(image)
+def do_iter(image, i, x):
+    output_imgs, xyz = run(image, x)
     image = output_imgs[-1]
-    image.save(f'full_output_{i}.png')
+    image.save(f'instance{i+1}.png')
     image = process_image(image)
-    return image
+    return image, xyz
     
 if __name__ == '__main__':
+    # Disable torch gradient computation for efficiency.
+    torch.set_grad_enabled(False)
     image = load_image(sys.argv[1])
     if len(sys.argv) > 2:
         x = int(sys.argv[2])
     else:
-        x = 20
-    output_imgs = run(image, x)
-    for i, output_img in enumerate(output_imgs):
-        output_img.save(f'output_{i}.png')
+        x = 12
+    run_x = x
+    xyzs = [(0,0,0)]
+    for i in range(30):
+        _, xyz = do_iter(image, i, run_x)
+        xyzs.append(xyz)
+        run_x += x
+        torch.cuda.empty_cache()
+    # Save xyzs to np
+    np.save('xyzs.npy', np.array(xyzs))
+
         

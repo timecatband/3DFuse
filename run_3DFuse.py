@@ -8,6 +8,8 @@ import imageio
 import gradio as gr
 import pose
 from PIL import Image
+from pose import circular_poses
+from pose import get_K
 
 from my.utils import (
     tqdm, EventStorage, HeartBeat, EarlyLoopBreak,
@@ -237,6 +239,7 @@ class SJC_3DFuse(BaseConf):
 
         initial_images = []
         initial_depth_images = []
+        self.num_initial_image=30
         for i in range(self.num_initial_image):
             initial_images.append(Image.open(os.path.join(image_dir,'instance{}.png'.format(i))))
             # Check if depth image exists
@@ -354,27 +357,39 @@ class NeRF_Fuser:
         self.calibration_value = 0.0
 
     def initial_overfit(self):
-        poses = pose.circular_poses(0.75,0,len(self.initial_latents))
-        for i in range(500):
+        poses = pose.circular_poses(1.0,0.0,len(self.initial_latents))
+        for i in range(50):
+            print("Overfitting, pose size", len(poses))
+            print("Current step", i)
             for j, render_pose in enumerate(poses):
                 expected_latents = self.initial_latents[j]
-                y1, depth1, ws1, _ = render_one_view(self.vox, self.aabb, self.H, self.W, pose.get_K(64,64,60), render_pose, return_w=True, use_app_net=False)
+                y1, depth1, ws1, _ = render_one_view(self.vox, self.aabb, self.H, self.W, pose.get_K(64,64,60), render_pose, return_w=True, use_app_net=True)
                 # Compute mse loss between ys and expected_latents
                 loss = torch.nn.functional.mse_loss(y1, expected_latents)
-                loss += torch.nn.functional.mse_loss(depth1, self.initial_depth_images[j])
+                if len(self.initial_depth_images) > 0:
+                    loss += torch.nn.functional.mse_loss(depth1, self.initial_depth_images[j])
+                # Choose random integer between 4 and 9
+                border_size = np.random.randint(4, 10)
+
+                center_depth = depth1[border_size:-border_size, border_size:-border_size]
+                border_depth_mean = (depth1.sum() - center_depth.sum()) / (64*64-50*50)
+                center_depth_mean = center_depth.mean()
+                depth_diff = center_depth_mean - border_depth_mean
+                depth_loss = - torch.log(depth_diff + 1e-12)
+                depth_loss = depth_loss*10
+                loss += depth_loss
+                
                 loss.backward()
+                print("i, j", i, j, "loss", loss.item(), "depth_loss", depth_loss.item())
                 self.opt.step()
                 self.opt.zero_grad()
-                # Print depth 1 shape min max
-                print("Depth 1 shape min max", depth1.shape, depth1.min(), depth1.max())
-                # Print initial depth shape min max
-                print("Initial depth shape min max", self.initial_depth_images[j].shape, self.initial_depth_images[j].min(), self.initial_depth_images[j].max())
-        rgbs = self.model.decode(y1)
-        # Convert to PIL image and save
-        rgbs = rgbs[0].cpu().numpy().transpose(1,2,0)
-        rgbs = (rgbs * 255).astype(np.uint8)
-        rgbs = Image.fromarray(rgbs)
-        rgbs.save(os.path.join(self.exp_instance_dir,"initial_overfit.png"))
+                
+            rgbs = self.model.decode(y1)
+            # Convert to PIL image and save
+            rgbs = rgbs[0].cpu().numpy().transpose(1,2,0)
+            rgbs = (rgbs * 255).astype(np.uint8)
+            rgbs = Image.fromarray(rgbs)
+            rgbs.save(os.path.join(self.exp_instance_dir,"initial_overfit.png"))
 
     def train(self):
         with tqdm(total=self.n_steps) as pbar, \
@@ -492,25 +507,27 @@ class NeRF_Fuser:
 
     def train_one_step(self, pose, angle, k, prompt_prefix, i, embed_fr):
         depth_map = render_depth_from_cloud(self.points, 
-                                            angle,
-                                            self.raster_settings,
-                                            device_glb,
-                                            self.calibration_value)
+                                                angle,
+                                                self.raster_settings,
+                                                device_glb,
+                                                self.calibration_value)
         
-        render_app_net = False
+        render_app_net = True
         if i > 500:
             render_app_net = True
-        if i > 500 and i < 1000:
-            self.vox.color.requires_grad = False
+   #     if i > 500 and i < 1000:
+  #          self.vox.color.requires_grad = False
             #self.vox.density.requires_grad = False
-        else:
-            self.vox.color.requires_grad = True
+ #       else:
+#            self.vox.color.requires_grad = True
             #self.vox.density.requires_grad = True
         y, depth, ws, weight_entropy = render_one_view(self.vox, self.aabb, self.H, self.W, k,
                                        pose, return_w=True, embed_fr = embed_fr, use_app_net = render_app_net)
 
         p = f"{prompt_prefix} {self.model.prompt}"
-        score_conds = self.model.prompts_emb([p])
+        score_conds = self.model.prompts_emb([p])['c']
+        negative_score_conds = self.model.prompts_emb(["blurry, distorted, noisy, low resolution, distorted anatomy, ugly, bad, low lighting"])['c']
+        #score_conds = torch.cat([negative_score_conds['c'], score_conds['c']])
             
         with torch.no_grad():
             ts_frac = int((len(self.ts))*embed_fr)
@@ -527,8 +544,7 @@ class NeRF_Fuser:
             noise = torch.randn(self.bs, *y.shape[1:], device=self.model.device)
 
             zs = y + chosen_σs * noise
-
-            Ds = self.model.denoise(zs, chosen_σs,depth_map.unsqueeze(dim=0),**score_conds)
+            Ds = self.model.denoise(zs, chosen_σs,depth_map.unsqueeze(dim=0),c=score_conds, uc=negative_score_conds)
 
             chosen_σs = chosen_σs.clamp(1,11.91)
             if self.var_red:
@@ -581,10 +597,10 @@ class NeRF_Fuser:
         # Print gradient norm of all params in the app_net
         #for param in self.vox.app_net.parameters():
          #   print("App net grad norm: ", param.grad.norm())
-        if (self.vox.density.grad != None):
-            self.vox.density.grad /= 10.0
-            if (self.vox.density.grad.norm().item() > 1000):
-                self.vox.density.grad /= 50.0
+       # if (self.vox.density.grad != None):
+        #    self.vox.density.grad /= 10.0
+        #    if (self.vox.density.grad.norm().item() > 1000):
+        #        self.vox.density.grad /= 50.0
     
         self.metric.put_scalars(**tsr_stats(y))
 

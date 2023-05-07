@@ -187,8 +187,6 @@ def render_ray_bundle(model, ro, rd, t_min, t_max, embed_fr=1.0, use_app_net=Fal
     density_pts = weights[mask]
     smp_dsts = dists[mask]
 
-    print("smp_pts shape: " + str(smp_pts.shape))
-    print("weights: " + str(density_pts.shape))
     smp_dirs = ro[0]-smp_pts
     smp_dirs = smp_dirs / (torch.norm(smp_dirs, dim=-1, keepdim=True)+0.0001)
     

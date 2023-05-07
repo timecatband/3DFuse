@@ -31,6 +31,7 @@ def train_eye_with_prompts(r, n):
     hs = np.random.rand(n) * 360
     vs = np.random.rand(n) * np.deg2rad(100)
     vs = np.clip(vs, 1e-2, π-1e-2)
+    vs[0:100] = 0.001
 
     prompts = []
     v_thresh = np.deg2rad(30)

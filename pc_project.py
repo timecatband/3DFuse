@@ -170,10 +170,11 @@ def point_e(device,exp_dir):
         guidance_scale=[3.0, 3.0],
     )
 
-    img = Image.open(os.path.join(exp_dir,'initial_image','instance0.png'))
+    imgs = []
+    imgs.append(Image.open(os.path.join(exp_dir,'initial_image','instance0.png')))
 
     samples = None
-    for x in tqdm(sampler.sample_batch_progressive(batch_size=1, model_kwargs=dict(images=[img]))):
+    for x in tqdm(sampler.sample_batch_progressive(batch_size=1, model_kwargs=dict(images=imgs))):
         samples = x
         
     pc = sampler.output_to_point_clouds(samples)[0]
