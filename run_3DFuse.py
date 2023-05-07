@@ -248,6 +248,8 @@ class SJC_3DFuse(BaseConf):
             image = torch.nn.functional.interpolate(image.unsqueeze(0).unsqueeze(0), size=(64,64), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
             image = image
             image = image.to("cuda")
+            image = 1-image
+            image *= 5.0
             initial_depth_images.append(image)
             
 
@@ -352,11 +354,11 @@ class NeRF_Fuser:
         self.calibration_value = 0.0
 
     def initial_overfit(self):
-        poses = pose.circular_poses(1.5,0,len(self.initial_latents))
-        for i in range(50):
+        poses = pose.circular_poses(0.75,0,len(self.initial_latents))
+        for i in range(500):
             for j, render_pose in enumerate(poses):
                 expected_latents = self.initial_latents[j]
-                y1, depth1, ws1, _ = render_one_view(self.vox, self.aabb, self.H, self.W, pose.get_K(64,64,60), render_pose, return_w=True, use_app_net=True)
+                y1, depth1, ws1, _ = render_one_view(self.vox, self.aabb, self.H, self.W, pose.get_K(64,64,60), render_pose, return_w=True, use_app_net=False)
                 # Compute mse loss between ys and expected_latents
                 loss = torch.nn.functional.mse_loss(y1, expected_latents)
                 loss += torch.nn.functional.mse_loss(depth1, self.initial_depth_images[j])
@@ -495,14 +497,14 @@ class NeRF_Fuser:
                                             device_glb,
                                             self.calibration_value)
         
-        render_app_net = True
+        render_app_net = False
         if i > 500:
             render_app_net = True
-        #if i > 500 and i < 1000:
-        #    self.vox.color.requires_grad = False
+        if i > 500 and i < 1000:
+            self.vox.color.requires_grad = False
             #self.vox.density.requires_grad = False
-        #else:
-        #    self.vox.color.requires_grad = True
+        else:
+            self.vox.color.requires_grad = True
             #self.vox.density.requires_grad = True
         y, depth, ws, weight_entropy = render_one_view(self.vox, self.aabb, self.H, self.W, k,
                                        pose, return_w=True, embed_fr = embed_fr, use_app_net = render_app_net)
