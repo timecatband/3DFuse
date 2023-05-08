@@ -12,4 +12,4 @@ def load_sd():
 pipe = load_sd()
 
 image = pipe(sys.argv[1]).images[0]
-image.save(prompt+".png")
+image.save(sys.argv[2])

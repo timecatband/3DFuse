@@ -800,5 +800,5 @@ if __name__ == "__main__":
         dev = torch.device('cuda')
         torch.nn.functional.conv2d(torch.zeros(s, s, s, s, device=dev), torch.zeros(s, s, s, s, device=dev))
     force_cudnn_initialization()
-    dispatch(SJC_3DFuse)
-#    dispatch(WriteNerf)
+    #dispatch(SJC_3DFuse)
+    dispatch(WriteNerf)
