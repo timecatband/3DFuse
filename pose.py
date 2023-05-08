@@ -31,7 +31,7 @@ def train_eye_with_prompts(r, n):
     hs = np.random.rand(n) * 360
     vs = np.random.rand(n) * np.deg2rad(100)
     vs = np.clip(vs, 1e-2, π-1e-2)
-    vs[0:100] = 0.001
+    #vs[0:100] = π-1e-2
 
     prompts = []
     v_thresh = np.deg2rad(30)
@@ -167,6 +167,7 @@ class Poser():
 
         
         FoV = np.random.rand(n) * 30 + 40
+        FoV[:] = 60
 
 
         random_Ks = [
@@ -184,10 +185,10 @@ class Poser():
         return random_Ks, poses, prompts, angles_list
 
     def sample_test(self, n):
-        poses = circular_poses(self.R, self.R, n, num_rounds=3)
+        poses = circular_poses(self.R, self.R/2, n, num_rounds=3)
         poses = np.stack(poses, axis=0)
         return self.K, poses
     def sample_random(self, n):
-        poses = np.array([random_poses(1.7) for i in range(n)])
+        poses = np.array([random_poses(1.5) for i in range(n)])
         poses = np.stack(poses,axis=0)
         return self.K, poses

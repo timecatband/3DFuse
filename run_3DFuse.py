@@ -37,6 +37,7 @@ from pc_project import point_e, render_depth_from_cloud
 
 from point_e.util import point_cloud
 import random
+import json
 
 device_glb = torch.device("cuda")
 
@@ -302,6 +303,107 @@ class SJC_3DFuse(BaseConf):
                               initial_depth_images=initial_depth_images)
         next(pipeline.train())      
 
+class WriteNerf(BaseConf):
+    family:     str = "sd"
+    sd:         SD = SD(
+        variant="v1",
+        prompt="a comfortable bed",
+        scale=100.0,
+        dir="./results",
+        alpha=0.3
+    )
+    lr:         float = 0.05
+    n_steps:    int = 2000
+    vox:        VoxConfig = VoxConfig(
+        model_type="V_SD", grid_size=100, density_shift=-1.0, c=3,
+        blend_bg_texture=False , bg_texture_hw=4,
+        bbox_len=1.0
+    )
+    pose:       PoseConfig = PoseConfig(rend_hw=64, FoV=60.0, R=1.5)
+
+    emptiness_scale:    int = 10
+    emptiness_weight:   int = 1e4
+    emptiness_step:     float = 0.5
+    emptiness_multiplier: float = 20.0
+
+    depth_weight:       int = 0
+
+    var_red:     bool = True
+    exp_dir:     str = "./results"
+    ti_step:     int = 800
+    pt_step:     int = 800
+    initial:    str = ""
+    random_seed:     int = 0
+    semantic_model:     str = "Karlo"
+    bg_preprocess:     bool = True
+    num_initial_image:     int = 4
+    @validator("vox")
+    def check_vox(cls, vox_cfg, values):
+        family = values['family']
+        if family == "sd":
+            vox_cfg.c = 4
+        return vox_cfg
+
+    def run(self):
+        cfgs = self.dict()
+        seed = cfgs.pop('random_seed')
+        seed_everything(seed)
+        initial = cfgs.pop('initial')
+        exp_instance_dir=os.path.join(cfgs.pop('exp_dir'),initial)
+        cfgs.pop("vox")
+        vox = self.vox.make()
+        
+        cfgs.pop("pose")
+        poser = self.pose.make()
+
+        family = cfgs.pop("family")
+        model = getattr(self, family).make()
+        
+        K, poses, _, _ = poser.sample_train(500, "cuda")
+
+        output = {}
+        output["camera_angle_x"] = output["camera_angle_y"] = np.deg2rad(60)
+        output["fl_x"] = output["fl_y"] = 0.5 / np.tan(output["camera_angle_x"] / 2)
+        output["width"] = output["height"] = 512
+        output["cx"] = output["cx"] = output["width"] / 2
+        output["frames"] = []
+
+        aabb = vox.aabb.T.cpu().numpy()
+        ckpt_list = glob.glob(os.path.join(exp_instance_dir,'3d','ckpt','*'))
+            # If ckpt exists, load it
+        if len(ckpt_list) > 0:
+            state_dict = torch.load(ckpt_list[0])
+            vox.load_state_dict(state_dict)
+            print("Loaded ckpt for voxnerf")
+        vox = vox.to("cuda")
+        vox.blend_bg_texture = False
+
+        for i, render_pose in enumerate(poses):
+            transform = np.array(render_pose)
+            # Invert transform
+            transform = np.linalg.inv(transform)
+            transform = transform.tolist()
+            frame = {
+                "file_path" : "images/{}.png".format(i),
+                "sharpness": 30.0,
+                "transform_matrix": transform
+            }
+            y, _ = render_one_view(vox, aabb, 64, 64, K[i], render_pose, use_app_net=True)
+            y = model.decode(y)
+            y = torch_samps_to_imgs(y)[0]
+            print("Y shape: {}".format(y.shape))
+            y = Image.fromarray(y)
+            # Make images dir if it doesn't exist
+            os.makedirs(os.path.join(exp_instance_dir, "images"), exist_ok=True)
+            y.save(os.path.join(exp_instance_dir, "images", "{}.png".format(i)))
+            output["frames"].append(frame)
+            if i > 100:
+                continue
+        # Convert frame to json
+        json_contents = json.dumps(output)
+        # Write json to file
+        with open(os.path.join(exp_instance_dir, "transforms_train.json"), "w") as f:
+            f.write(json_contents)            
 
 
 import glob
@@ -357,8 +459,8 @@ class NeRF_Fuser:
         self.calibration_value = 0.0
 
     def initial_overfit(self):
-        poses = pose.circular_poses(1.0,0.0,len(self.initial_latents))
-        for i in range(50):
+        poses = pose.circular_poses(1.25,0.0,len(self.initial_latents))
+        for i in range(20):
             print("Overfitting, pose size", len(poses))
             print("Current step", i)
             for j, render_pose in enumerate(poses):
@@ -372,7 +474,7 @@ class NeRF_Fuser:
                 border_size = np.random.randint(4, 10)
 
                 center_depth = depth1[border_size:-border_size, border_size:-border_size]
-                border_depth_mean = (depth1.sum() - center_depth.sum()) / (64*64-50*50)
+                border_depth_mean = (depth1.sum() - center_depth.sum()) / (64*64-(64-border_size*2)**2)
                 center_depth_mean = center_depth.mean()
                 depth_diff = center_depth_mean - border_depth_mean
                 depth_loss = - torch.log(depth_diff + 1e-12)
@@ -413,6 +515,7 @@ class NeRF_Fuser:
             self.initial_overfit()
             for j in range(5):
                 for i in range(len(self.poses_)):
+
                     use_guidance = i % 5 != 0
                     if i < 1000: use_guidance = True
                     use_guidance = True
@@ -428,9 +531,9 @@ class NeRF_Fuser:
                                             self.prompt_prefixes_[i], i+j*len(self.poses_), embed_fr)
                     else:
                         self.train_one_step_no_guidance(self.poses_[i], self.angles_list[i], self.Ks_[i], i)
-                                                
-                    self.opt.step()
-                    self.opt.zero_grad()
+                    if i%2 == 0:                                                
+                        self.opt.step()
+                        self.opt.zero_grad()
                     if (i%1000 == 0):
                         metric.put_artifact(
                             "ckpt", ".pt","", lambda fn: torch.save(self.vox.state_dict(), fn)
@@ -533,9 +636,9 @@ class NeRF_Fuser:
             ts_frac = int((len(self.ts))*embed_fr)
             if ts_frac == 0: ts_frac = 1
             #chosen_σs = np.random.choice(self.ts[(ts_frac-1):ts_frac], self.bs, replace=False)
-            noise_amount = 3.00*(1-(i/self.n_steps))
+            noise_amount = 3.1*(1-(i/self.n_steps))
             chosen_σs = np.random.choice((noise_amount,), self.bs, replace=False)
-            chosen_σs = chosen_σs.clip(1.1,12)
+            chosen_σs = chosen_σs.clip(0.5,12)
             print("Chosen σ: ", chosen_σs)
             chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
             chosen_σs = torch.as_tensor(chosen_σs, device=self.model.device, dtype=torch.float32)
@@ -546,7 +649,7 @@ class NeRF_Fuser:
             zs = y + chosen_σs * noise
             Ds = self.model.denoise(zs, chosen_σs,depth_map.unsqueeze(dim=0),c=score_conds, uc=negative_score_conds)
 
-            chosen_σs = chosen_σs.clamp(1,11.91)
+            chosen_σs = chosen_σs.clamp(0.5,11.91)
             if self.var_red:
                 grad = (Ds - y) / chosen_σs
             else:
@@ -635,7 +738,7 @@ def evaluate(score_model, vox, poser):
         if fuse.on_break():
             break
         pose = poses[i]
-        y, depth = render_one_view(vox, aabb, H, W, K, pose)
+        y, depth = render_one_view(vox, aabb, H, W, K, pose, use_app_net=True)
         y = score_model.decode(y)
         vis_routine(metric, y, depth,"",None)
 
@@ -698,3 +801,4 @@ if __name__ == "__main__":
         torch.nn.functional.conv2d(torch.zeros(s, s, s, s, device=dev), torch.zeros(s, s, s, s, device=dev))
     force_cudnn_initialization()
     dispatch(SJC_3DFuse)
+#    dispatch(WriteNerf)
